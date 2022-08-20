@@ -311,7 +311,7 @@ static LRESULT DEFWND_DefWinProc( HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
     case WM_CONTEXTMENU:
         if (GetWindowLongW( hwnd, GWL_STYLE ) & WS_CHILD)
-            SendMessageW( GetParent(hwnd), msg, (WPARAM)hwnd, lParam );
+            SendMessageW( GetParent(hwnd), msg, wParam, lParam );
         else
         {
             LONG hitcode;
