@@ -1573,10 +1573,18 @@ static LRESULT CALLBACK desktop_wndproc_wrapper( HWND hwnd, UINT msg, WPARAM wp,
     {
     case WM_WINE_NOTIFY_ACTIVITY:
     {
+#if MAC_OS_X_VERSION_MIN_REQUIRED > 1070
         /* This wakes from display sleep, but doesn't affect the screen saver. */
         static IOPMAssertionID assertion;
         IOPMAssertionDeclareUserActivity(CFSTR("Wine user input"), kIOPMUserActiveLocal, &assertion);
-
+#else
+        /* https://stackoverflow.com/questions/10598809/how-do-i-wake-from-display-sleep-in-osx-10-7-4 */
+        io_registry_entry_t regEntry = IORegistryEntryFromPath(kIOMasterPortDefault, "IOService:/IOResources/IODisplayWrangler");
+        if (regEntry != MACH_PORT_NULL) {
+            IORegistryEntrySetCFProperty(regEntry, CFSTR("IORequestIdle"), kCFBooleanFalse);
+            IOObjectRelease(regEntry);
+        }
+#endif
         /* This prevents the screen saver, but doesn't wake from display sleep. */
         /* It's deprecated, but there's no better alternative. */
 #pragma clang diagnostic push
