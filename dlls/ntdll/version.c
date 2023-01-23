@@ -482,7 +482,7 @@ void version_init(void)
 
     NtQuerySystemInformation( SystemWineVersionInformation, wine_version, sizeof(wine_version), NULL );
 
-    current_version = &VersionData[WIN7];
+    current_version = &VersionData[WIN10];
 
     /* awful CrossOver hack^H^H^H^Hproprietary enhancement */
     {
