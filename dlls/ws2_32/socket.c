@@ -836,10 +836,18 @@ static const int ws_ip_map[][2] =
     MAP_OPTION( IP_MULTICAST_LOOP ),
     MAP_OPTION( IP_ADD_MEMBERSHIP ),
     MAP_OPTION( IP_DROP_MEMBERSHIP ),
+#ifdef IP_ADD_SOURCE_MEMBERSHIP
     MAP_OPTION( IP_ADD_SOURCE_MEMBERSHIP ),
+#endif
+#ifdef IP_DROP_SOURCE_MEMBERSHIP
     MAP_OPTION( IP_DROP_SOURCE_MEMBERSHIP ),
+#endif
+#ifdef IP_BLOCK_SOURCE
     MAP_OPTION( IP_BLOCK_SOURCE ),
+#endif
+#ifdef IP_UNBLOCK_SOURCE
     MAP_OPTION( IP_UNBLOCK_SOURCE ),
+#endif
     MAP_OPTION( IP_OPTIONS ),
 #ifdef IP_HDRINCL
     MAP_OPTION( IP_HDRINCL ),
@@ -5636,7 +5644,9 @@ int WINAPI WS_setsockopt(SOCKET s, int level, int optname,
     int woptval;
     struct linger linger;
     struct timeval tval;
+#if MAC_OS_X_VERSION_MAX_ALLOWED > 1070
     struct ip_mreq_source mreq_source;
+#endif
 
     TRACE("(socket %04lx, %s, optval %s, optlen %d)\n", s,
           debugstr_sockopt(level, optname), debugstr_optval(optval, optlen),
@@ -5852,6 +5862,7 @@ int WINAPI WS_setsockopt(SOCKET s, int level, int optname,
         case WS_IP_BLOCK_SOURCE:
         case WS_IP_UNBLOCK_SOURCE:
         {
+#if MAC_OS_X_VERSION_MAX_ALLOWED > 1070
             WS_IP_MREQ_SOURCE* val = (void*)optval;
             mreq_source.imr_interface.s_addr = val->imr_interface.S_un.S_addr;
             mreq_source.imr_multiaddr.s_addr = val->imr_multiaddr.S_un.S_addr;
@@ -5861,6 +5872,7 @@ int WINAPI WS_setsockopt(SOCKET s, int level, int optname,
             optlen = sizeof(mreq_source);
 
             convert_sockopt(&level, &optname);
+#endif
             break;
         }
         case WS_IP_ADD_MEMBERSHIP:
