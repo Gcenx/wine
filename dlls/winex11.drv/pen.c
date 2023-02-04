@@ -47,7 +47,7 @@ static DWORD get_user_dashes( char *res, const DWORD *style, DWORD len )
         }
         else dashes[pos++] = dashes[i];
     }
-    for (i = 0; i < pos; i++) res[i] = min( dashes[i], 255 );
+    for (i = 0; i < pos; i++) res[i] = min( dashes[i], (int)255 );
     return pos;
 }
 
