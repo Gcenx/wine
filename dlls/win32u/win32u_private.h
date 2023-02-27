@@ -32,10 +32,11 @@
 #include "wine/debug.h"
 #include "wine/server.h"
 
-struct unix_funcs
+struct __wine_send_input_params
 {
-    /* Wine-specific functions */
-    BOOL (CDECL *wine_send_input)( HWND hwnd, const INPUT *input, const RAWINPUT *rawinput );
+    HWND hwnd;
+    const INPUT *input;
+    const RAWINPUT *rawinput;
 };
 
 /* clipboard.c */
@@ -244,7 +245,6 @@ static inline void release_win_ptr( struct tagWND *ptr )
     user_unlock();
 }
 
-extern void wrappers_init( unixlib_handle_t handle ) DECLSPEC_HIDDEN;
 extern void gdi_init(void) DECLSPEC_HIDDEN;
 extern NTSTATUS callbacks_init( void *args ) DECLSPEC_HIDDEN;
 extern void winstation_init(void) DECLSPEC_HIDDEN;

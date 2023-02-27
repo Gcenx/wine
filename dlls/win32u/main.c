@@ -57,9 +57,14 @@ BOOL WINAPI DllMain( HINSTANCE inst, DWORD reason, void *reserved )
                                    &win32u_handle, sizeof(win32u_handle), NULL ))
         {
             __wine_unix_call( win32u_handle, 0, &__wine_syscall_dispatcher );
-            wrappers_init( win32u_handle );
         }
         break;
     }
     return TRUE;
+}
+
+BOOL CDECL __wine_send_input( HWND hwnd, const INPUT *input, const RAWINPUT *rawinput )
+{
+    struct __wine_send_input_params params = { hwnd, input, rawinput };
+    return (BOOL)__wine_unix_call( win32u_handle, 1, &params);
 }

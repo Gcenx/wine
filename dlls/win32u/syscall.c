@@ -451,10 +451,16 @@ static NTSTATUS init( void *dispatcher )
     return ntdll_init_syscalls( 1, &syscall_table, dispatcher );
 }
 
+static NTSTATUS win32u_send_input(void *args)
+{
+    struct __wine_send_input_params *params = (struct __wine_send_input_params *)args;
+    return (NTSTATUS)__wine_send_input(params->hwnd, params->input, params->rawinput);
+}
+
 unixlib_entry_t __wine_unix_call_funcs[] =
 {
     init,
-    callbacks_init,
+    win32u_send_input,
 };
 
 #ifdef _WIN64
