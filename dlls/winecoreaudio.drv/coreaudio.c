@@ -69,8 +69,10 @@
 #include "wine/unixlib.h"
 
 #include "unixlib.h"
+#include "coreaudio_cocoa.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(coreaudio);
+WINE_DECLARE_DEBUG_CHANNEL(winediag);
 
 #define MAX_DEV_NAME_LEN 10 /* Max 32 bit digits */
 
@@ -95,6 +97,8 @@ struct coreaudio_stream
     WAVEFORMATEX *fmt;
     BYTE *local_buffer, *cap_buffer, *wrap_buffer, *resamp_buffer, *tmp_buffer;
 };
+
+static ULONG_PTR zero_bits = 0;
 
 static HRESULT osstatus_to_hresult(OSStatus sc)
 {
@@ -182,6 +186,20 @@ static BOOL device_has_channels(AudioDeviceID device, EDataFlow flow)
     }
     free(buffers);
     return ret;
+}
+
+static NTSTATUS unix_process_attach(void *args)
+{
+#ifdef _WIN64
+    if (NtCurrentTeb()->WowTebOffset)
+    {
+        SYSTEM_BASIC_INFORMATION info;
+
+        NtQuerySystemInformation(SystemEmulationBasicInformation, &info, sizeof(info), NULL);
+        zero_bits = (ULONG_PTR)info.HighestUserAddress | 0x7fffffff;
+    }
+#endif
+    return STATUS_SUCCESS;
 }
 
 static NTSTATUS unix_get_endpoint_ids(void *args)
@@ -620,15 +638,6 @@ static HRESULT ca_setup_audiounit(EDataFlow dataflow, AudioComponentInstance uni
     return S_OK;
 }
 
-static ULONG_PTR zero_bits(void)
-{
-#ifdef _WIN64
-    return !NtCurrentTeb()->WowTebOffset ? 0 : 0x7fffffff;
-#else
-    return 0;
-#endif
-}
-
 static AudioDeviceID dev_id_from_device(const char *device)
 {
     return strtoul(device, NULL, 10);
@@ -687,6 +696,22 @@ static NTSTATUS unix_create_stream(void *args)
         goto end;
     }
 
+    if (stream->flow == eCapture) {
+        /* On 10.14 and later:
+         * Check the audio capture/microphone authorization status, and explicitly
+         * request it if the user hasn't previously granted or denied permission.
+         */
+        int authstatus = CoreAudio_get_capture_authorization_status();
+        TRACE("Audio capture authorization status: %d\n", authstatus);
+
+        if (authstatus == NOT_DETERMINED)
+            authstatus = CoreAudio_request_capture_authorization();
+
+        if (authstatus == 0)
+            ERR_(winediag)("Microphone/audio capture permission was denied. "
+                           "This can be enabled under Security & Privacy in System Preferences.\n");
+    }
+
     sc = AudioUnitInitialize(stream->unit);
     if(sc != noErr){
         WARN("Couldn't initialize: %x\n", (int)sc);
@@ -704,7 +729,7 @@ static NTSTATUS unix_create_stream(void *args)
     }
 
     size = stream->bufsize_frames * stream->fmt->nBlockAlign;
-    if(NtAllocateVirtualMemory(GetCurrentProcess(), (void **)&stream->local_buffer, zero_bits(),
+    if(NtAllocateVirtualMemory(GetCurrentProcess(), (void **)&stream->local_buffer, zero_bits,
                                &size, MEM_COMMIT, PAGE_READWRITE)){
         params->result = E_OUTOFMEMORY;
         goto end;
@@ -1392,7 +1417,7 @@ static NTSTATUS unix_get_render_buffer(void *args)
                 stream->tmp_buffer = NULL;
             }
             size = params->frames * stream->fmt->nBlockAlign;
-            if(NtAllocateVirtualMemory(GetCurrentProcess(), (void **)&stream->tmp_buffer, zero_bits(),
+            if(NtAllocateVirtualMemory(GetCurrentProcess(), (void **)&stream->tmp_buffer, zero_bits,
                                        &size, MEM_COMMIT, PAGE_READWRITE)){
                 stream->tmp_buffer_frames = 0;
                 params->result = E_OUTOFMEMORY;
@@ -1490,7 +1515,7 @@ static NTSTATUS unix_get_capture_buffer(void *args)
         chunk_bytes = chunk_frames * stream->fmt->nBlockAlign;
         if(!stream->tmp_buffer){
             size = stream->period_frames * stream->fmt->nBlockAlign;
-            NtAllocateVirtualMemory(GetCurrentProcess(), (void **)&stream->tmp_buffer, zero_bits(),
+            NtAllocateVirtualMemory(GetCurrentProcess(), (void **)&stream->tmp_buffer, zero_bits,
                                     &size, MEM_COMMIT, PAGE_READWRITE);
         }
         *params->data = stream->tmp_buffer;
@@ -1647,7 +1672,7 @@ static NTSTATUS unix_set_volumes(void *args)
 
 unixlib_entry_t __wine_unix_call_funcs[] =
 {
-    NULL,
+    unix_process_attach,
     NULL,
     NULL,
     unix_get_endpoint_ids,
@@ -1935,6 +1960,7 @@ static NTSTATUS unix_wow64_get_position(void *args)
     struct
     {
         stream_handle stream;
+        BOOL device;
         HRESULT result;
         PTR32 pos;
         PTR32 qpctime;
@@ -1942,6 +1968,7 @@ static NTSTATUS unix_wow64_get_position(void *args)
     struct get_position_params params =
     {
         .stream = params32->stream,
+        .device = params32->device,
         .pos = ULongToPtr(params32->pos),
         .qpctime = ULongToPtr(params32->qpctime)
     };
@@ -1991,7 +2018,7 @@ static NTSTATUS unix_wow64_set_volumes(void *args)
 
 unixlib_entry_t __wine_unix_call_wow64_funcs[] =
 {
-    NULL,
+    unix_process_attach,
     NULL,
     NULL,
     unix_wow64_get_endpoint_ids,

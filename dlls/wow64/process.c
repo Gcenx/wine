@@ -46,6 +46,16 @@ static SIZE_T get_machine_context_size( USHORT machine )
     }
 }
 
+static BOOL is_32b_prefix_on_wow64( void )
+{
+    UNICODE_STRING name_str, val_str;
+
+    RtlInitUnicodeString( &name_str, L"WINEWOW6432BPREFIXMODE" );
+    val_str.MaximumLength = 0;
+    if (RtlQueryEnvironmentVariable_U( NULL, &name_str, &val_str ) != STATUS_VARIABLE_NOT_FOUND)
+        return TRUE;
+    return FALSE;
+}
 
 static BOOL is_process_wow64( HANDLE handle )
 {
@@ -793,9 +803,34 @@ NTSTATUS WINAPI wow64_NtQueryInformationProcess( UINT *args )
         if (retlen) *retlen = sizeof(VM_COUNTERS_EX32);
         return STATUS_INFO_LENGTH_MISMATCH;
 
+    case ProcessWow64Information:  /* ULONG_PTR */
+        /* CW HACK 21111
+         * Spoof the result of NtQueryInformationProcess(ProcessWow64Information) for 'DXSETUP.exe'
+         * when using a 32-bit bottle under Wow64.
+         * The 'DirectX for Modern Games' installer uses this to determine when on a 64-bit OS.
+         */
+        if (is_32b_prefix_on_wow64())
+        {
+            WCHAR filename[512];
+            UNICODE_STRING name_us;
+
+            name_us.Buffer = filename;
+            name_us.MaximumLength = sizeof(filename);
+            status = LdrGetDllFullName( NULL, &name_us );
+            if (len == sizeof(ULONG) && !status && (name_us.Length != name_us.MaximumLength) && (name_us.Length > 22))
+            {
+                filename[name_us.Length / sizeof(WCHAR)] = '\0';
+                if (!wcscmp(&filename[(name_us.Length - 22) / sizeof(WCHAR)], L"DXSETUP.exe"))
+                {
+                    *(ULONG *)ptr = 0;
+                    if (retlen) *retlen = sizeof(ULONG);
+                    return STATUS_SUCCESS;
+                }
+            }
+        }
+        // fallthrough
     case ProcessDebugPort:  /* ULONG_PTR */
     case ProcessAffinityMask:  /* ULONG_PTR */
-    case ProcessWow64Information:  /* ULONG_PTR */
     case ProcessDebugObjectHandle:  /* HANDLE */
         if (len == sizeof(ULONG))
         {
@@ -1198,6 +1233,7 @@ NTSTATUS WINAPI wow64_NtSetInformationThread( UINT *args )
         else return STATUS_INVALID_PARAMETER;
 
     case ThreadNameInformation:   /* THREAD_NAME_INFORMATION */
+    case ThreadWineNativeThreadName:
         if (len == sizeof(THREAD_NAME_INFORMATION32))
         {
             THREAD_NAME_INFORMATION32 *info32 = ptr;

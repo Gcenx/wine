@@ -25,8 +25,13 @@
 #include <math.h>
 #include "win32u_private.h"
 
+#include "wine/server_protocol.h"
+
 /* extra stock object: default 1x1 bitmap for memory DCs */
 #define DEFAULT_BITMAP (STOCK_LAST+1)
+
+/* Undocumented value for DIB's color use: indicates a mono DIB w/o pal entries */
+#define DIB_PAL_INDICES 2
 
 struct gdi_obj_funcs
 {
@@ -403,6 +408,10 @@ extern BOOL PATH_RestorePath( DC *dst, DC *src ) DECLSPEC_HIDDEN;
 
 /* painting.c */
 extern POINT *GDI_Bezier( const POINT *Points, INT count, INT *nPtsOut ) DECLSPEC_HIDDEN;
+
+extern struct window_surface *create_shm_surface( HWND hwnd, const RECT *visible_rect,
+                                                  struct window_surface *old_surface ) DECLSPEC_HIDDEN;
+extern void process_surface_message( const MSG *msg, const rectangle_t *bounds ) DECLSPEC_HIDDEN;
 
 /* palette.c */
 extern HPALETTE PALETTE_Init(void) DECLSPEC_HIDDEN;

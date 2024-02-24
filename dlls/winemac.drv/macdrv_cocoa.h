@@ -119,6 +119,22 @@ enum {
     TOPMOST_FLOAT_INACTIVE_ALL,
 };
 
+/* CrossOver Hack 10912: Mac Edit menu */
+enum {
+    MAC_EDIT_MENU_DISABLED,
+    MAC_EDIT_MENU_BY_MESSAGE,
+    MAC_EDIT_MENU_BY_KEY,
+};
+
+enum {
+    EDIT_COMMAND_COPY,
+    EDIT_COMMAND_CUT,
+    EDIT_COMMAND_DELETE,
+    EDIT_COMMAND_PASTE,
+    EDIT_COMMAND_SELECT_ALL,
+    EDIT_COMMAND_UNDO,
+};
+
 enum {
     GL_SURFACE_IN_FRONT_OPAQUE,
     GL_SURFACE_IN_FRONT_TRANSPARENT,
@@ -155,6 +171,8 @@ struct macdrv_display {
 extern int macdrv_err_on;
 extern int topmost_float_inactive DECLSPEC_HIDDEN;
 extern int capture_displays_for_fullscreen DECLSPEC_HIDDEN;
+/* CrossOver Hack 10912: Mac Edit menu */
+extern int mac_edit_menu DECLSPEC_HIDDEN;
 extern int left_option_is_alt DECLSPEC_HIDDEN;
 extern int right_option_is_alt DECLSPEC_HIDDEN;
 extern int left_command_is_ctrl DECLSPEC_HIDDEN;
@@ -242,12 +260,15 @@ static inline CGPoint cgpoint_win_from_mac(CGPoint point)
 extern int macdrv_start_cocoa_app(unsigned long long tickcount) DECLSPEC_HIDDEN;
 extern void macdrv_window_rejected_focus(const struct macdrv_event *event) DECLSPEC_HIDDEN;
 extern void macdrv_beep(void) DECLSPEC_HIDDEN;
-extern void macdrv_set_application_icon(CFArrayRef images) DECLSPEC_HIDDEN;
+extern void macdrv_set_application_icon(CFArrayRef images, CFURLRef url /* CrossOver Hack 13440 */) DECLSPEC_HIDDEN;
 extern void macdrv_quit_reply(int reply) DECLSPEC_HIDDEN;
 extern int macdrv_using_input_method(void) DECLSPEC_HIDDEN;
 extern void macdrv_set_mouse_capture_window(macdrv_window window) DECLSPEC_HIDDEN;
 extern void macdrv_set_cocoa_retina_mode(int new_mode) DECLSPEC_HIDDEN;
 
+/* application model user IDs */
+extern int macdrv_set_current_process_explicit_app_user_model_id(const UniChar *aumid, size_t length) DECLSPEC_HIDDEN;
+extern int macdrv_get_current_process_explicit_app_user_model_id(UniChar *buffer, size_t size) DECLSPEC_HIDDEN;
 
 /* cursor */
 extern void macdrv_set_cursor(CFStringRef name, CFArrayRef frames) DECLSPEC_HIDDEN;
@@ -319,6 +340,7 @@ enum {
     APP_DEACTIVATED,
     APP_QUIT_REQUESTED,
     DISPLAYS_CHANGED,
+    EDIT_MENU_COMMAND, /* CrossOver Hack 10912: Mac Edit menu */
     HOTKEY_PRESS,
     IM_SET_TEXT,
     KEY_PRESS,
@@ -373,6 +395,11 @@ typedef struct macdrv_event {
         struct {
             int activating;
         }                                           displays_changed;
+        /* CrossOver Hack 10912: Mac Edit menu */
+        struct {
+            int             command;
+            unsigned long   time_ms;
+        }                                           edit_menu_command;
         struct {
             unsigned int    vkey;
             unsigned int    mod_flags;
@@ -635,5 +662,15 @@ extern void macdrv_set_status_item_image(macdrv_status_item s, CGImageRef cgimag
 extern void macdrv_set_status_item_tooltip(macdrv_status_item s, CFStringRef cftip) DECLSPEC_HIDDEN;
 
 extern void macdrv_clear_ime_text(void) DECLSPEC_HIDDEN;
+
+/* CX HACK 16565 */
+extern void macdrv_force_popup_order_front(macdrv_window w) DECLSPEC_HIDDEN;
+
+/* CrossOver Hack #15388 */
+extern int quicken_signin_hack;
+
+/* CrossOver Hack #20512 */
+extern int is_apple_silicon(void) DECLSPEC_HIDDEN;
+extern int is_skyrim_se_launcher(void) DECLSPEC_HIDDEN;
 
 #endif  /* __WINE_MACDRV_COCOA_H */

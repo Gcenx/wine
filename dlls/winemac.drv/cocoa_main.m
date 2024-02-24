@@ -70,6 +70,15 @@ static void run_cocoa_app(void* info)
     {
         [WineApplication sharedApplication];
         created_app = TRUE;
+
+        /* CrossOver hack 11196: Disable loading of input managers */
+        [[NSUserDefaults standardUserDefaults] registerDefaults:
+            [NSDictionary dictionaryWithObject:@"NO" forKey:@"NSUseCocoaInputServers"]];
+
+        /* CrossOver hack 12205: Prevent call to NSVersionOfRunTimeLibrary() during app startup.
+                                 It can crash if a Wine thread unloads a dylib simultaneously. */
+        [[NSUserDefaults standardUserDefaults] registerDefaults:
+            [NSDictionary dictionaryWithObject:@"YES" forKey:@"NSUseActiveDisplayForMainScreen"]];
     }
 
     if ([NSApp respondsToSelector:@selector(setWineController:)])

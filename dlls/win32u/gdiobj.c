@@ -566,7 +566,7 @@ static void init_gdi_shared(void)
 {
     SIZE_T size = sizeof(*gdi_shared);
 
-    if (NtAllocateVirtualMemory( GetCurrentProcess(), (void **)&gdi_shared, zero_bits(),
+    if (NtAllocateVirtualMemory( GetCurrentProcess(), (void **)&gdi_shared, zero_bits,
                                  &size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE ))
         return;
     next_unused = gdi_shared->Handles + FIRST_GDI_HANDLE;
@@ -1028,130 +1028,6 @@ BOOL WINAPI NtGdiSetColorAdjustment( HDC hdc, const COLORADJUSTMENT *ca )
 }
 
 
-static struct unix_funcs unix_funcs =
-{
-    NtGdiAbortDoc,
-    NtGdiAbortPath,
-    NtGdiAlphaBlend,
-    NtGdiAngleArc,
-    NtGdiArcInternal,
-    NtGdiBeginPath,
-    NtGdiBitBlt,
-    NtGdiCloseFigure,
-    NtGdiComputeXformCoefficients,
-    NtGdiCreateCompatibleBitmap,
-    NtGdiCreateCompatibleDC,
-    NtGdiCreateDIBitmapInternal,
-    NtGdiCreateMetafileDC,
-    NtGdiDdDDICheckVidPnExclusiveOwnership,
-    NtGdiDdDDICloseAdapter,
-    NtGdiDdDDICreateDCFromMemory,
-    NtGdiDdDDIDestroyDCFromMemory,
-    NtGdiDdDDIDestroyDevice,
-    NtGdiDdDDIEscape,
-    NtGdiDdDDIOpenAdapterFromDeviceName,
-    NtGdiDdDDIOpenAdapterFromLuid,
-    NtGdiDdDDIQueryVideoMemoryInfo,
-    NtGdiDdDDISetVidPnSourceOwner,
-    NtGdiDeleteObjectApp,
-    NtGdiDoPalette,
-    NtGdiEllipse,
-    NtGdiEndDoc,
-    NtGdiEndPath,
-    NtGdiEndPage,
-    NtGdiEnumFonts,
-    NtGdiExcludeClipRect,
-    NtGdiExtEscape,
-    NtGdiExtFloodFill,
-    NtGdiExtTextOutW,
-    NtGdiExtSelectClipRgn,
-    NtGdiFillPath,
-    NtGdiFillRgn,
-    NtGdiFontIsLinked,
-    NtGdiFrameRgn,
-    NtGdiGetAndSetDCDword,
-    NtGdiGetAppClipBox,
-    NtGdiGetBoundsRect,
-    NtGdiGetCharABCWidthsW,
-    NtGdiGetCharWidthW,
-    NtGdiGetCharWidthInfo,
-    NtGdiGetDIBitsInternal,
-    NtGdiGetDeviceCaps,
-    NtGdiGetDeviceGammaRamp,
-    NtGdiGetFontData,
-    NtGdiGetFontUnicodeRanges,
-    NtGdiGetGlyphIndicesW,
-    NtGdiGetGlyphOutline,
-    NtGdiGetKerningPairs,
-    NtGdiGetNearestColor,
-    NtGdiGetOutlineTextMetricsInternalW,
-    NtGdiGetPixel,
-    NtGdiGetRandomRgn,
-    NtGdiGetRasterizerCaps,
-    NtGdiGetRealizationInfo,
-    NtGdiGetTextCharsetInfo,
-    NtGdiGetTextExtentExW,
-    NtGdiGetTextFaceW,
-    NtGdiGetTextMetricsW,
-    NtGdiGradientFill,
-    NtGdiIntersectClipRect,
-    NtGdiInvertRgn,
-    NtGdiLineTo,
-    NtGdiMaskBlt,
-    NtGdiModifyWorldTransform,
-    NtGdiMoveTo,
-    NtGdiOffsetClipRgn,
-    NtGdiOpenDCW,
-    NtGdiPatBlt,
-    NtGdiPlgBlt,
-    NtGdiPolyDraw,
-    NtGdiPolyPolyDraw,
-    NtGdiPtVisible,
-    NtGdiRectVisible,
-    NtGdiRectangle,
-    NtGdiResetDC,
-    NtGdiResizePalette,
-    NtGdiRestoreDC,
-    NtGdiRoundRect,
-    NtGdiScaleViewportExtEx,
-    NtGdiScaleWindowExtEx,
-    NtGdiSelectBitmap,
-    NtGdiSelectBrush,
-    NtGdiSelectClipPath,
-    NtGdiSelectFont,
-    NtGdiSelectPen,
-    NtGdiSetBoundsRect,
-    NtGdiSetDIBitsToDeviceInternal,
-    NtGdiSetDeviceGammaRamp,
-    NtGdiSetLayout,
-    NtGdiSetPixel,
-    NtGdiSetSystemPaletteUse,
-    NtGdiStartDoc,
-    NtGdiStartPage,
-    NtGdiStretchBlt,
-    NtGdiStretchDIBitsInternal,
-    NtGdiStrokeAndFillPath,
-    NtGdiStrokePath,
-    NtGdiTransparentBlt,
-    NtGdiUnrealizeObject,
-    NtGdiUpdateColors,
-    NtGdiWidenPath,
-    NtUserDrawCaptionTemp,
-    NtUserDrawMenuBarTemp,
-    NtUserEndPaint,
-    NtUserExcludeUpdateRgn,
-    NtUserReleaseDC,
-    NtUserScrollDC,
-    NtUserSelectPalette,
-    NtUserUpdateLayeredWindow,
-
-    SetDIBits,
-    __wine_get_brush_bitmap_info,
-    __wine_get_file_outline_text_metric,
-    __wine_get_icm_profile,
-    __wine_send_input,
-};
-
 void gdi_init(void)
 {
     pthread_mutexattr_t attr;
@@ -1168,10 +1044,4 @@ void gdi_init(void)
 
     dpi = font_init();
     init_stock_objects( dpi );
-}
-
-NTSTATUS callbacks_init( void *args )
-{
-    *(const struct unix_funcs **)args = &unix_funcs;
-    return 0;
 }

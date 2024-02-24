@@ -151,6 +151,18 @@ static const printenv_t * const all_printenv[] = { &env_x86, &env_x64, &env_arm,
 #error not defined for this cpu
 #endif
 
+#ifdef __ANDROID__
+/* CX HACK 15766: Android: Support Google Cloud Print */
+static char *strdup_unixcp( const WCHAR *str )
+{
+    char *ret;
+    int len = WideCharToMultiByte( CP_UNIXCP, 0, str, -1, NULL, 0, NULL, NULL );
+    if ((ret = HeapAlloc( GetProcessHeap(), 0, len )))
+        WideCharToMultiByte( CP_UNIXCP, 0, str, -1, ret, len, NULL, NULL );
+    return ret;
+}
+#endif
+
 /******************************************************************
  *  validate the user-supplied printing-environment [internal]
  *
@@ -650,6 +662,8 @@ static BOOL add_printer_driver( const WCHAR *name, const WCHAR *ppd_dir )
     res = !UNIX_CALL( get_ppd, &ppd_params ) || get_internal_fallback_ppd( ppd );
     if (!res) goto end;
 
+    AddPrintProcessorW(NULL, NULL, driver_nt, (WCHAR *)L"wineps");
+
     memset( &di3, 0, sizeof(DRIVER_INFO_3W) );
     di3.cVersion         = 3;
     di3.pName            = (WCHAR *)name;
@@ -721,7 +735,7 @@ static BOOL init_unix_printers( void )
     HANDLE added_printer;
     PRINTER_INFO_2W pi2;
     NTSTATUS status;
-    WCHAR raw[] = L"RAW", winprint[] = L"WinPrint", empty[] = L"";
+    WCHAR raw[] = L"RAW", wineps[] = L"wineps", empty[] = L"";
     int i;
 
     if (create_printers_reg_key( system_printers_key, &printers_key ))
@@ -754,6 +768,8 @@ static BOOL init_unix_printers( void )
             RegDeleteValueW( printer_key, May_Delete_Value );
             /* flag that the PPD file should be checked for an update */
             set_reg_DWORD( printer_key, L"Status", status | PRINTER_STATUS_DRIVER_UPDATE_NEEDED );
+            RegSetValueExW( printer_key, L"Print Processor", 0, REG_SZ, (const BYTE*)wineps,
+                    (wcslen( wineps ) + 1) * sizeof(WCHAR));
             RegCloseKey( printer_key );
         }
         else
@@ -768,7 +784,7 @@ static BOOL init_unix_printers( void )
             memset( &pi2, 0, sizeof(PRINTER_INFO_2W) );
             pi2.pPrinterName    = printer->name;
             pi2.pDatatype       = raw;
-            pi2.pPrintProcessor = winprint;
+            pi2.pPrintProcessor = wineps;
             pi2.pDriverName     = printer->name;
             pi2.pComment        = printer->comment;
             pi2.pLocation       = printer->location;
@@ -2037,6 +2053,15 @@ BOOL WINAPI OpenPrinter2W(LPWSTR name, HANDLE *printer,
     {
         /* NT: FALSE with ERROR_INVALID_PARAMETER, 9x: TRUE */
         SetLastError( ERROR_INVALID_PARAMETER );
+        return FALSE;
+    }
+
+    /* CrossOver hack for bug 21116 */
+    if (name && (!wcsncmp(name, L"progeCAD PDF Virtual Printer", 28) ||
+                !wcsncmp(name, L"progeCAD Image Virtual Printer", 30)))
+    {
+        TRACE("Crossover hack: Return error for %s printer\n", debugstr_w(name));
+        *printer = NULL;
         return FALSE;
     }
 
@@ -6024,10 +6049,13 @@ DWORD WINAPI EnumPrinterDataExA(HANDLE hPrinter, LPCSTR pKeyName,
 /******************************************************************************
  *      AbortPrinter (WINSPOOL.@)
  */
-BOOL WINAPI AbortPrinter( HANDLE hPrinter )
+BOOL WINAPI AbortPrinter(HANDLE printer)
 {
-    FIXME("(%p), stub!\n", hPrinter);
-    return TRUE;
+    HANDLE handle = get_backend_handle(printer);
+
+    TRACE("(%p)\n", printer);
+
+    return backend->fpAbortPrinter(handle);
 }
 
 /******************************************************************************
@@ -6254,6 +6282,26 @@ BOOL WINAPI AddPrinterDriverExW( LPWSTR pName, DWORD level, LPBYTE pDriverInfo, 
         SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
+
+#ifdef __ANDROID__
+    {
+        /* CX HACK 15766: Android: Support Google Cloud Print */
+        WCHAR *ppd_dir = NULL, *ppd_fullpath;
+        char *printer_name;
+        DRIVER_INFO_3W *pd = (DRIVER_INFO_3W*)pDriverInfo;
+        TRACE( "Querying for fallback ppd on Android.\n" );
+        ppd_dir = get_ppd_dir();
+
+        if (!pName) pName = pd->pName;
+        ppd_fullpath = get_ppd_filename( ppd_dir, pName );
+        printer_name = strdup_unixcp( pName );
+
+        get_fallback_ppd( printer_name, ppd_fullpath );
+        pd->pDataFile = ppd_fullpath;
+        dwFileCopyFlags |= APD_COPY_NEW_FILES | APD_COPY_FROM_DIRECTORY;
+        HeapFree( GetProcessHeap(), 0, printer_name );
+    }
+#endif
 
     return backend->fpAddPrinterDriverEx(pName, level, pDriverInfo, dwFileCopyFlags);
 }

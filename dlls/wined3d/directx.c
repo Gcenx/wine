@@ -238,6 +238,9 @@ ULONG CDECL wined3d_decref(struct wined3d *wined3d)
  * 24 -> Windows 10 April 2018 Update - WDDM 2.4
  * 25 -> Windows 10 October 2018 Update - WDDM 2.5
  * 26 -> Windows 10 May 2019 Update - WDDM 2.6
+ * 27 -> Windows 10 May 2020 Update - WDDM 2.7
+ * 30 -> Windows 11 21H2 - WDDM 3.0
+ * 31 -> Windows 11 22H2 - WDDM 3.1
  *
  * "y" is the maximum Direct3D version / feature level the driver supports.
  * 11 -> 6
@@ -285,7 +288,7 @@ static const struct driver_version_information driver_version_table[] =
     {DRIVER_AMD_R600,           DRIVER_MODEL_NT5X,  "ati2dvag.dll",    10, 1280},
     {DRIVER_AMD_R300,           DRIVER_MODEL_NT6X,  "atiumdag.dll",    10, 741 },
     {DRIVER_AMD_R600,           DRIVER_MODEL_NT6X,  "atiumdag.dll",    10, 1280},
-    {DRIVER_AMD_RX,             DRIVER_MODEL_NT6X,  "aticfx32.dll", 15002,   61},
+    {DRIVER_AMD_RX,             DRIVER_MODEL_NT6X,  "aticfx32.dll", 21023, 2010}, /* Adrenalin 23.7.2 */
 
     /* Intel
      * The drivers are unified but not all versions support all GPUs. At some point the 2k/xp
@@ -297,7 +300,7 @@ static const struct driver_version_information driver_version_table[] =
     {DRIVER_INTEL_GMA3000,      DRIVER_MODEL_NT5X,  "igxprd32.dll",    10, 5218},
     {DRIVER_INTEL_GMA950,       DRIVER_MODEL_NT6X,  "igdumd32.dll",    10, 1504},
     {DRIVER_INTEL_GMA3000,      DRIVER_MODEL_NT6X,  "igdumd32.dll",    10, 1666},
-    {DRIVER_INTEL_HD4000,       DRIVER_MODEL_NT6X,  "igdumdim32.dll",  15, 4352},
+    {DRIVER_INTEL_HD4000,       DRIVER_MODEL_NT6X,  "igdumdim32.dll", 101, 4577},
 
     /* Nvidia
      * - Geforce8 and newer is supported by the current 340.52 driver on XP-Win8
@@ -314,7 +317,7 @@ static const struct driver_version_information driver_version_table[] =
     {DRIVER_NVIDIA_GEFORCE6,    DRIVER_MODEL_NT6X,  "nvd3dum.dll",     13,  783},
     {DRIVER_NVIDIA_GEFORCE8,    DRIVER_MODEL_NT6X,  "nvd3dum.dll",     13, 4052},
     {DRIVER_NVIDIA_FERMI,       DRIVER_MODEL_NT6X,  "nvd3dum.dll",     13, 9135},
-    {DRIVER_NVIDIA_KEPLER,      DRIVER_MODEL_NT6X,  "nvd3dum.dll",     14, 4587},
+    {DRIVER_NVIDIA_KEPLER,      DRIVER_MODEL_NT6X,  "nvd3dum.dll",     15, 3118}, /* 531.18 */
 
     /* Red Hat */
     {DRIVER_REDHAT_VIRGL,       DRIVER_MODEL_GENERIC, "virgl.dll",      0,    0},
@@ -772,7 +775,7 @@ bool wined3d_driver_info_init(struct wined3d_driver_info *driver_info,
                 break;
 
             case 10:
-                driver_os_version = 26;
+                driver_os_version = 31;
                 driver_model = DRIVER_MODEL_NT6X;
                 break;
 
@@ -827,6 +830,10 @@ bool wined3d_driver_info_init(struct wined3d_driver_info *driver_info,
         driver_feature_level = min(driver_feature_level, 18);
     else if (os_version.dwMajorVersion < 6)
         driver_feature_level = min(driver_feature_level, 14);
+
+    /* Drivers with the OS version 30+ all have the feature level word set to 0 */
+    if (driver_os_version >= 30)
+        driver_feature_level = 0;
 
     driver_info->vendor = gpu_desc->vendor;
     driver_info->device = gpu_desc->device;
@@ -1770,6 +1777,42 @@ HRESULT CDECL wined3d_adapter_get_identifier(const struct wined3d_adapter *adapt
     identifier->shared_system_memory = min(~(SIZE_T)0, adapter->driver_info.sysmem_bytes);
 
     wined3d_mutex_unlock();
+
+    {
+        WCHAR name[MAX_PATH], *module_exe;
+        if (GetModuleFileNameW(NULL, name, sizeof(name)))
+        {
+            module_exe = wcsrchr(name, '\\');
+            module_exe = module_exe ? module_exe + 1 : name;
+
+            /* CW HACK 19356 */
+            if (!lstrcmpW(module_exe, L"GTAIV.exe"))
+            {
+                /* GTA IV hangs on launch trying to init nvapi if it sees an NVIDIA GPU */
+                if (identifier->vendor_id == HW_VENDOR_NVIDIA)
+                {
+                    identifier->vendor_id = HW_VENDOR_AMD;
+                    identifier->device_id = CARD_AMD_RADEON_RX_480;
+                }
+
+                /* GTA IV ends up using its "Intel integrated" codepath for determining
+                 * VRAM size (since nvapi/atiadlxx fail), but this requires that
+                 * DedicatedVideoMemory is a very small dummy value, and SharedSystemMemory
+                 * is the actual VRAM size.
+                 * Swap the memory values around so this works.
+                 */
+                identifier->shared_system_memory = identifier->video_memory;
+                identifier->video_memory = 32 * 1024 * 1024;
+            }
+
+            /* CW HACK 19355: GTA 5 crashes on launch trying to init nvapi if it sees an NVIDIA GPU */
+            if (!lstrcmpW(module_exe, L"GTA5.exe") && (identifier->vendor_id == HW_VENDOR_NVIDIA))
+            {
+                    identifier->vendor_id = HW_VENDOR_AMD;
+                    identifier->device_id = CARD_AMD_RADEON_RX_480;
+            }
+        }
+    }
 
     return WINED3D_OK;
 }
@@ -3508,13 +3551,25 @@ done:
 
 static struct wined3d_adapter *wined3d_adapter_create(unsigned int ordinal, DWORD wined3d_creation_flags)
 {
+    struct wined3d_adapter *adapter = NULL;
+
     if (wined3d_creation_flags & WINED3D_NO3D)
         return wined3d_adapter_no3d_create(ordinal, wined3d_creation_flags);
 
     if (wined3d_settings.renderer == WINED3D_RENDERER_VULKAN)
         return wined3d_adapter_vk_create(ordinal, wined3d_creation_flags);
 
-    return wined3d_adapter_gl_create(ordinal, wined3d_creation_flags);
+    if (wined3d_settings.renderer == WINED3D_RENDERER_OPENGL)
+        return wined3d_adapter_gl_create(ordinal, wined3d_creation_flags);
+
+    /* CW HACK 18311: Use the Vulkan renderer on macOS. */
+    if ((adapter = wined3d_adapter_vk_create(ordinal, wined3d_creation_flags)))
+        ERR_(winediag)("Using the Vulkan renderer for d3d10/11 applications.\n");
+
+    if (!adapter)
+        adapter = wined3d_adapter_gl_create(ordinal, wined3d_creation_flags);
+
+    return adapter;
 }
 
 static void STDMETHODCALLTYPE wined3d_null_wined3d_object_destroyed(void *parent) {}

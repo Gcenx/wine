@@ -90,11 +90,14 @@ static struct wine_preload_info preload_info[] =
     { (void *)0x00001000, 0x0000f000 },  /* low 64k */
     { (void *)0x00010000, 0x00100000 },  /* DOS area */
     { (void *)0x00110000, 0x67ef0000 },  /* low memory area */
-    { (void *)0x7f000000, 0x03000000 },  /* top-down allocations + shared heap + virtual heap */
+    { (void *)0x7a000000, 0x02000000 },  /* builtin DLLs (ntdll, kernel32) */
+    { (void *)0x7f000000, 0x03000000 },  /* top-down allocations + shared user data + virtual heap */
 #else  /* __i386__ */
     { (void *)0x000000010000, 0x00100000 },  /* DOS area */
     { (void *)0x000000110000, 0x67ef0000 },  /* low memory area */
-    { (void *)0x00007ff00000, 0x000f0000 },  /* shared user data */
+    { (void *)0x00007a000000, 0x02000000 },  /* 32-bit builtin DLLs (ntdll, kernel32) */
+    { (void *)0x00007f000000, 0x00ff0000 },  /* 32-bit top-down allocations + shared user data */
+    { (void *)0x000080000000, 0x80000000 },  /* 2-4GB large-address-aware area */
     { (void *)0x000100000000, 0x14000000 },  /* WINE_4GB_RESERVE section */
     { (void *)0x7ff000000000, 0x01ff0000 },  /* top-down allocations + virtual heap */
 #endif /* __i386__ */
@@ -312,6 +315,9 @@ void *wld_munmap( void *start, size_t len );
 SYSCALL_FUNC( wld_munmap, 73 /* SYS_munmap */ );
 
 static intptr_t (*p_dyld_get_image_slide)( const struct target_mach_header* mh );
+#ifdef __x86_64__
+static void (*p_dyld_make_delayed_module_initializer_calls)( void );
+#endif
 
 #define MAKE_FUNCPTR(f) static typeof(f) * p##f
 MAKE_FUNCPTR(dlopen);
@@ -322,6 +328,41 @@ MAKE_FUNCPTR(dladdr);
 extern int _dyld_func_lookup( const char *dyld_func_name, void **address );
 
 /* replacement for libc functions */
+
+#ifdef __i386__ /* CrossOver Hack #16371 */
+static inline size_t wld_strlen( const char *str )
+{
+    size_t len;
+    for (len = 0; str[len]; ++len)
+        /* nothing */;
+    return len;
+}
+
+static inline int wld_tolower( int c )
+{
+    if ('A' <= c && c <= 'Z')
+        return c - 'A' + 'a';
+    return c;
+}
+
+static inline int wld_strncasecmp( const char *str1, const char *str2, size_t len )
+{
+    if (len <= 0) return 0;
+    while ((--len > 0) && *str1 && (wld_tolower(*str1) == wld_tolower(*str2))) { str1++; str2++; }
+    return wld_tolower(*str1) - wld_tolower(*str2);
+}
+
+static inline const char * wld_strcasestr( const char *haystack, const char *needle )
+{
+    size_t len = wld_strlen(needle);
+    for ( ; *haystack ; ++haystack)
+    {
+        if (!wld_strncasecmp(haystack, needle, len))
+            return haystack;
+    }
+    return NULL;
+}
+#endif
 
 void * memmove( void *dst, const void *src, size_t len )
 {
@@ -653,7 +694,6 @@ static void set_program_vars( void *stack, void *mod )
 
 void *wld_start( void *stack, int *is_unix_thread )
 {
-    struct wine_preload_info builtin_dlls = { (void *)0x7a000000, 0x02000000 };
     struct wine_preload_info **wine_main_preload_info;
     char **argv, **p, *reserve = NULL;
     struct target_mach_header *mh;
@@ -680,6 +720,22 @@ void *wld_start( void *stack, int *is_unix_thread )
     LOAD_POSIX_DYLD_FUNC( dlsym );
     LOAD_POSIX_DYLD_FUNC( dladdr );
     LOAD_MACHO_DYLD_FUNC( _dyld_get_image_slide );
+#ifdef __x86_64__
+    LOAD_MACHO_DYLD_FUNC( _dyld_make_delayed_module_initializer_calls );
+#endif
+
+#ifdef __i386__ /* CrossOver Hack #16371 */
+    {
+        const char *qw;
+        if (*pargc >= 3 && (qw = wld_strcasestr(argv[2], "qw")) && wld_strcasestr(qw + 2, "patch.exe"))
+        {
+            if (preload_info[3].addr == (void *)0x00110000 && preload_info[3].size == 0x67ef0000)
+                preload_info[3].size = 0x70ef0000;
+            else
+                wld_printf( "warning: detected Quicken patcher (%s) but preload_info is not as expected; not applying adjustment", argv[2] );
+        }
+    }
+#endif
 
     /* reserve memory that Wine needs */
     if (reserve) preload_reserve( reserve );
@@ -692,15 +748,14 @@ void *wld_start( void *stack, int *is_unix_thread )
         }
     }
 
-    if (!map_region( &builtin_dlls ))
-        builtin_dlls.size = 0;
+#ifdef __x86_64__
+    /* CW HACK 22327: needed for macOS Sonoma (and also fixes GStreamer) */
+    p_dyld_make_delayed_module_initializer_calls();
+#endif
 
     /* load the main binary */
     if (!(mod = pdlopen( argv[1], RTLD_NOW )))
         fatal_error( "%s: could not load binary\n", argv[1] );
-
-    if (builtin_dlls.size)
-        wld_munmap( builtin_dlls.addr, builtin_dlls.size );
 
     /* store pointer to the preload info into the appropriate main binary variable */
     wine_main_preload_info = pdlsym( mod, "wine_main_preload_info" );

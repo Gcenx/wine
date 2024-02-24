@@ -198,8 +198,7 @@ typedef struct DC_ATTR
     RECTL     emf_bounds;
     UINT64    emf;                 /* client EMF record pointer */
     UINT64    abort_proc;          /* AbortProc for printing */
-    UINT64    hspool;
-    UINT64    output;
+    UINT64    print;               /* client printer info pointer */
 } DC_ATTR;
 
 struct font_enum_entry
@@ -482,11 +481,12 @@ NTSTATUS WINAPI NtGdiDdDDISetQueuedLimit( D3DKMT_SETQUEUEDLIMIT *desc );
 NTSTATUS WINAPI NtGdiDdDDISetVidPnSourceOwner( const D3DKMT_SETVIDPNSOURCEOWNER *desc );
 
 /* Wine extensions */
-extern BOOL CDECL __wine_get_brush_bitmap_info( HBRUSH handle, BITMAPINFO *info, void *bits,
+INT WINAPI NtGdiSetDIBits(HDC,HBITMAP,UINT,UINT,LPCVOID,const BITMAPINFO*,UINT);
+extern BOOL WINAPI __wine_get_brush_bitmap_info( HBRUSH handle, BITMAPINFO *info, void *bits,
                                                 UINT *usage );
-extern BOOL CDECL __wine_get_icm_profile( HDC hdc, BOOL allow_default, DWORD *size,
-                                          WCHAR *filename );
-extern BOOL CDECL __wine_get_file_outline_text_metric( const WCHAR *path,
-                                                       OUTLINETEXTMETRICW *otm );
+extern BOOL WINAPI __wine_get_icm_profile( HDC hdc, BOOL allow_default, DWORD *size,
+                                           WCHAR *filename );
+extern BOOL WINAPI __wine_get_file_outline_text_metric( const WCHAR *path, TEXTMETRICW *otm,
+                                                        UINT *em_square, WCHAR *face_name );
 
 #endif /* _NTGDI_ */

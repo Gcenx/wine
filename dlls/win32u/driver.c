@@ -914,6 +914,16 @@ static void nulldrv_ThreadDetach( void )
 {
 }
 
+static NTSTATUS nulldrv_SetCurrentProcessExplicitAppUserModelID( LPCWSTR aumid )
+{
+    return E_NOTIMPL;
+}
+
+static NTSTATUS nulldrv_GetCurrentProcessExplicitAppUserModelID( LPWSTR buffer, INT size )
+{
+    return E_NOTIMPL;
+}
+
 static const WCHAR guid_key_prefixW[] =
 {
     '\\','R','e','g','i','s','t','r','y',
@@ -1159,6 +1169,16 @@ static const struct vulkan_funcs * loaderdrv_wine_get_vulkan_driver( UINT versio
     return load_driver()->pwine_get_vulkan_driver( version );
 }
 
+static NTSTATUS loaderdrv_SetCurrentProcessExplicitAppUserModelID( LPCWSTR aumid )
+{
+    return load_driver()->pSetCurrentProcessExplicitAppUserModelID( aumid );
+}
+
+static NTSTATUS loaderdrv_GetCurrentProcessExplicitAppUserModelID( LPWSTR buffer, INT size )
+{
+    return load_driver()->pGetCurrentProcessExplicitAppUserModelID( buffer, size );
+}
+
 static const struct user_driver_funcs lazy_load_driver =
 {
     { NULL },
@@ -1218,6 +1238,10 @@ static const struct user_driver_funcs lazy_load_driver =
     nulldrv_wine_get_wgl_driver,
     /* thread management */
     nulldrv_ThreadDetach,
+    /* application user model ID support */
+    /* CW Hack 22310 */
+    loaderdrv_SetCurrentProcessExplicitAppUserModelID,
+    loaderdrv_GetCurrentProcessExplicitAppUserModelID,
 };
 
 const struct user_driver_funcs *user_driver = &lazy_load_driver;
@@ -1289,6 +1313,8 @@ void __wine_set_user_driver( const struct user_driver_funcs *funcs, UINT version
     SET_USER_FUNC(wine_get_vulkan_driver);
     SET_USER_FUNC(wine_get_wgl_driver);
     SET_USER_FUNC(ThreadDetach);
+    SET_USER_FUNC(SetCurrentProcessExplicitAppUserModelID);
+    SET_USER_FUNC(GetCurrentProcessExplicitAppUserModelID);
 #undef SET_USER_FUNC
 
     prev = InterlockedCompareExchangePointer( (void **)&user_driver, driver, (void *)&lazy_load_driver );

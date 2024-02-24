@@ -48,6 +48,15 @@
 
 #include "wine/debug.h"
 
+#include <assert.h>
+
+#ifdef HAVE_GMP_H
+#include <gmp.h>
+#endif
+
+#include <fcntl.h>
+#include <unistd.h>
+
 WINE_DEFAULT_DEBUG_CHANNEL(bcrypt);
 WINE_DECLARE_DEBUG_CHANNEL(winediag);
 
@@ -79,6 +88,12 @@ typedef enum
 typedef struct gnutls_x509_spki_st *gnutls_x509_spki_t;
 #endif
 
+struct dh_key_data
+{
+    UCHAR            *pubkey;     /* Used for DH private key only. */
+    UCHAR            *privkey;    /* Used for DH private key only. */
+};
+
 union key_data
 {
     gnutls_cipher_hd_t cipher;
@@ -87,12 +102,38 @@ union key_data
         gnutls_privkey_t privkey;
         gnutls_pubkey_t  pubkey;
     } a;
+    struct /* DH */
+    {
+        UCHAR            *privkey;
+        UCHAR            *pubkey;
+    } d;
 };
 C_ASSERT( sizeof(union key_data) <= sizeof(((struct key *)0)->private) );
 
 static union key_data *key_data( struct key *key )
 {
     return (union key_data *)key->private;
+}
+
+static unsigned int dh_pubkey_len( struct key *key )
+{
+    return sizeof(BCRYPT_DH_KEY_BLOB) + key->u.a.bitlen / 8 * 3;
+}
+
+static void dh_key_free( struct key *key )
+{
+    free( key_data(key)->d.privkey );
+    free( key_data(key)->d.pubkey );
+}
+
+static void dh_key_alloc( struct key *key )
+{
+    unsigned int bitlen = key->u.a.bitlen;
+
+    if (key_data(key)->d.pubkey) return;
+
+    key_data(key)->d.privkey = calloc( 1, bitlen / 8 );
+    key_data(key)->d.pubkey = calloc( 1, dh_pubkey_len( key ));
 }
 
 /* Not present in gnutls version < 3.0 */
@@ -144,7 +185,16 @@ static void (*pgnutls_x509_spki_set_rsa_pss_params)(gnutls_x509_spki_t, gnutls_d
 static int (*pgnutls_pubkey_set_spki)(gnutls_pubkey_t, const gnutls_x509_spki_t, unsigned int);
 static int (*pgnutls_privkey_set_spki)(gnutls_privkey_t, const gnutls_x509_spki_t, unsigned int);
 
+static int (*pgnutls_dh_params_init)(gnutls_dh_params_t * dh_params);
+static void (*pgnutls_dh_params_deinit)(gnutls_dh_params_t dh_params);
+static int (*pgnutls_dh_params_generate2)(gnutls_dh_params_t dparams, unsigned int bits);
+static int (*pgnutls_dh_params_import_raw2)(gnutls_dh_params_t dh_params, const gnutls_datum_t * prime,
+        const gnutls_datum_t * generator, unsigned key_bits);
+static int (*pgnutls_dh_params_export_raw)(gnutls_dh_params_t params, gnutls_datum_t * prime,
+        gnutls_datum_t * generator, unsigned int *bits);
+
 static void *libgnutls_handle;
+
 #define MAKE_FUNCPTR(f) static typeof(f) * p##f
 MAKE_FUNCPTR(gnutls_cipher_decrypt2);
 MAKE_FUNCPTR(gnutls_cipher_deinit);
@@ -164,6 +214,22 @@ MAKE_FUNCPTR(gnutls_pubkey_deinit);
 MAKE_FUNCPTR(gnutls_pubkey_encrypt_data);
 MAKE_FUNCPTR(gnutls_pubkey_import_privkey);
 MAKE_FUNCPTR(gnutls_pubkey_init);
+
+#if defined(HAVE_GMP_H) && defined(SONAME_LIBGMP)
+static BOOL dh_supported;
+static void *libgmp_handle;
+
+MAKE_FUNCPTR(mpz_init);
+MAKE_FUNCPTR(mpz_clear);
+MAKE_FUNCPTR(mpz_cmp);
+MAKE_FUNCPTR(_mpz_cmp_ui);
+MAKE_FUNCPTR(mpz_sizeinbase);
+MAKE_FUNCPTR(mpz_import);
+MAKE_FUNCPTR(mpz_export);
+MAKE_FUNCPTR(mpz_mod);
+MAKE_FUNCPTR(mpz_powm);
+MAKE_FUNCPTR(mpz_sub_ui);
+#endif
 #undef MAKE_FUNCPTR
 
 static int compat_gnutls_cipher_tag(gnutls_cipher_hd_t handle, void *tag, size_t tag_size)
@@ -322,7 +388,21 @@ static NTSTATUS gnutls_process_attach( void *args )
         setenv("GNUTLS_SYSTEM_PRIORITY_FILE", "/dev/null", 0);
     }
 
-    if (!(libgnutls_handle = dlopen( SONAME_LIBGNUTLS, RTLD_NOW )))
+if (1) { /* CROSSOVER HACK - bug 10151 */
+    const char *libgnutls_name_candidates[] = {SONAME_LIBGNUTLS,
+                                               "libgnutls.so.30",
+                                               "libgnutls.so.28",
+                                               "libgnutls-deb0.so.28",
+                                               "libgnutls.so.26",
+                                               NULL};
+    int i;
+    for (i=0; libgnutls_name_candidates[i] && !libgnutls_handle; i++)
+        libgnutls_handle = dlopen(libgnutls_name_candidates[i], RTLD_NOW);
+}
+else
+    libgnutls_handle = dlopen( SONAME_LIBGNUTLS, RTLD_NOW );
+
+    if (!libgnutls_handle)
     {
         ERR_(winediag)( "failed to load libgnutls, no support for encryption\n" );
         return STATUS_DLL_NOT_FOUND;
@@ -352,6 +432,37 @@ static NTSTATUS gnutls_process_attach( void *args )
     LOAD_FUNCPTR(gnutls_pubkey_import_privkey);
     LOAD_FUNCPTR(gnutls_pubkey_init);
 #undef LOAD_FUNCPTR
+
+#if defined(HAVE_GMP_H) && defined(SONAME_LIBGMP)
+#define LOAD_FUNCPTR_STR(f) #f
+#define LOAD_FUNCPTR(f) \
+    if (!(p##f = dlsym( libgmp_handle, LOAD_FUNCPTR_STR(f) ))) \
+    { \
+        ERR( "failed to load %s\n", LOAD_FUNCPTR_STR(f) ); \
+        goto fail; \
+    }
+
+    if ((libgmp_handle = dlopen( SONAME_LIBGMP, RTLD_NOW )))
+    {
+        LOAD_FUNCPTR(mpz_init);
+        LOAD_FUNCPTR(mpz_clear);
+        LOAD_FUNCPTR(mpz_cmp);
+        LOAD_FUNCPTR(_mpz_cmp_ui);
+        LOAD_FUNCPTR(mpz_sizeinbase);
+        LOAD_FUNCPTR(mpz_import);
+        LOAD_FUNCPTR(mpz_export);
+        LOAD_FUNCPTR(mpz_mod);
+        LOAD_FUNCPTR(mpz_powm);
+        LOAD_FUNCPTR(mpz_sub_ui);
+    }
+    else
+    {
+        ERR_(winediag)( "failed to load libgmp, no support for DH\n" );
+        goto fail;
+    }
+#undef LOAD_FUNCPTR
+#undef LOAD_FUNCPTR_STR
+#endif
 
 #define LOAD_FUNCPTR_OPT(f) \
     if (!(p##f = dlsym( libgnutls_handle, #f ))) \
@@ -392,6 +503,33 @@ static NTSTATUS gnutls_process_attach( void *args )
         pgnutls_perror( ret );
         goto fail;
     }
+    if (!(pgnutls_dh_params_init = dlsym( libgnutls_handle, "gnutls_dh_params_init" )))
+    {
+        WARN("gnutls_dh_params_init not found\n");
+    }
+    if (!(pgnutls_dh_params_deinit = dlsym( libgnutls_handle, "gnutls_dh_params_deinit" )))
+    {
+        WARN("gnutls_dh_params_deinit not found\n");
+    }
+    if (!(pgnutls_dh_params_generate2 = dlsym( libgnutls_handle, "gnutls_dh_params_generate2" )))
+    {
+        WARN("gnutls_dh_params_generate2 not found\n");
+    }
+    if (!(pgnutls_dh_params_import_raw2 = dlsym( libgnutls_handle, "gnutls_dh_params_import_raw2" )))
+    {
+        WARN("gnutls_dh_params_import_raw2 not found\n");
+    }
+    if (!(pgnutls_dh_params_export_raw = dlsym( libgnutls_handle, "gnutls_dh_params_export_raw" )))
+    {
+        WARN("gnutls_dh_params_export_raw not found\n");
+    }
+
+#if defined(HAVE_GMP_H) && defined(SONAME_LIBGMP)
+    dh_supported = pgnutls_dh_params_init && pgnutls_dh_params_generate2 && pgnutls_dh_params_import_raw2
+            && libgmp_handle;
+#else
+    ERR_(winediag)("Compiled without DH support.\n");
+#endif
 
     if (TRACE_ON( bcrypt ))
     {
@@ -404,6 +542,14 @@ static NTSTATUS gnutls_process_attach( void *args )
 fail:
     dlclose( libgnutls_handle );
     libgnutls_handle = NULL;
+
+#if defined(HAVE_GMP_H) && defined(SONAME_LIBGMP)
+    if (libgmp_handle)
+    {
+        dlclose( libgmp_handle );
+        libgmp_handle = NULL;
+    }
+#endif
     return STATUS_DLL_NOT_FOUND;
 }
 
@@ -416,6 +562,11 @@ static NTSTATUS gnutls_process_detach( void *args )
         libgnutls_handle = NULL;
     }
     return STATUS_SUCCESS;
+
+#if defined(HAVE_GMP_H) && defined(SONAME_LIBGMP)
+    dlclose( libgmp_handle );
+    libgmp_handle = NULL;
+#endif
 }
 
 struct buffer
@@ -951,6 +1102,175 @@ done:
     return status;
 }
 
+#if defined(HAVE_GMP_H) && defined(SONAME_LIBGMP)
+static NTSTATUS CDECL gen_random(void *buffer, unsigned int length)
+{
+    unsigned int read_size;
+    int dev_random;
+
+    dev_random = open("/dev/urandom", O_RDONLY);
+    if (dev_random == -1)
+    {
+        FIXME("couldn't open /dev/urandom.\n");
+        return STATUS_INTERNAL_ERROR;
+    }
+
+    read_size = read(dev_random, buffer, length);
+    close(dev_random);
+    if (read_size != length)
+    {
+        FIXME("Could not read from /dev/urandom.");
+        return STATUS_INTERNAL_ERROR;
+    }
+    return STATUS_SUCCESS;
+}
+
+static void import_mpz(mpz_t value, const void *input, unsigned int length)
+{
+    pmpz_import(value, length, 1, 1, 0, 0, input);
+}
+
+static void export_mpz(void *output, unsigned int length, const mpz_t value)
+{
+    size_t export_length;
+    unsigned int offset;
+
+    export_length = (pmpz_sizeinbase(value, 2) + 7) / 8;
+    assert(export_length <= length);
+    offset = length - export_length;
+    memset(output, 0, offset);
+    pmpz_export((BYTE *)output + offset, &export_length, 1, 1, 0, 0, value);
+    if (!export_length)
+    {
+        ERR("Zero export length, value bits %u.\n", (unsigned)pmpz_sizeinbase(value, 2));
+        memset((BYTE *)output + offset, 0, length - offset);
+    }
+    else
+    {
+        assert(export_length + offset == length);
+    }
+}
+
+static NTSTATUS CDECL key_dh_generate( struct key *key )
+{
+    NTSTATUS status = STATUS_SUCCESS;
+    mpz_t p, psub1, g, privkey, pubkey;
+    ULONG key_length;
+    unsigned int i;
+    int ret;
+
+    if (!dh_supported)
+    {
+        ERR("DH is not available.\n");
+        return STATUS_NOT_IMPLEMENTED;
+    }
+
+    key_length = key->u.a.bitlen / 8;
+
+    if (!(key->u.a.flags & KEY_FLAG_DH_PARAMS_SET))
+    {
+        gnutls_datum_t prime, generator;
+        gnutls_dh_params_t dh_params;
+
+        if ((ret = pgnutls_dh_params_init( &dh_params )))
+        {
+            pgnutls_perror( ret );
+            return STATUS_INTERNAL_ERROR;
+        }
+        dh_key_alloc( key );
+
+        if ((ret = pgnutls_dh_params_generate2( dh_params, key->u.a.bitlen )))
+        {
+            pgnutls_perror( ret );
+            pgnutls_dh_params_deinit( dh_params );
+            return STATUS_INTERNAL_ERROR;
+        }
+        if ((ret = pgnutls_dh_params_export_raw( dh_params, &prime, &generator, NULL )))
+        {
+            pgnutls_perror( ret );
+            pgnutls_dh_params_deinit( dh_params );
+            return STATUS_INTERNAL_ERROR;
+        }
+        pgnutls_dh_params_deinit( dh_params );
+
+
+        export_gnutls_datum( (UCHAR *)((BCRYPT_DH_KEY_BLOB *)key_data(key)->d.pubkey + 1), key_length, &prime, 1 );
+        export_gnutls_datum( (UCHAR *)((BCRYPT_DH_KEY_BLOB *)key_data(key)->d.pubkey + 1) + key_length,
+                key_length, &generator, 1 );
+        free( prime.data );
+        free( generator.data );
+
+        key->u.a.flags |= KEY_FLAG_DH_PARAMS_SET;
+    }
+
+    pmpz_init(p);
+    pmpz_init(psub1);
+    pmpz_init(g);
+    pmpz_init(pubkey);
+    pmpz_init(privkey);
+
+    import_mpz(p, (BCRYPT_DH_KEY_BLOB *)key_data(key)->d.pubkey + 1, key_length);
+    if (!mpz_sgn(p))
+    {
+        ERR("Got zero modulus.\n");
+        status = STATUS_INTERNAL_ERROR;
+        goto done;
+    }
+    pmpz_sub_ui(psub1, p, 1);
+
+    import_mpz(g, (UCHAR *)((BCRYPT_DH_KEY_BLOB *)key_data(key)->d.pubkey + 1) + key_length, key_length);
+    if (!mpz_sgn(g))
+    {
+        ERR("Got zero generator.\n");
+        status = STATUS_INTERNAL_ERROR;
+        goto done;
+    }
+    for (i = 0; i < 3; ++i)
+    {
+        if ((status = gen_random(key_data(key)->d.privkey, key_length)))
+        {
+            goto done;
+        }
+        import_mpz(privkey, key_data(key)->d.privkey, key_length);
+
+        pmpz_mod(privkey, privkey, p);
+        pmpz_powm(pubkey, g, privkey, p);
+        if (p_mpz_cmp_ui(pubkey, 1))
+            break;
+    }
+    if (i == 3)
+    {
+        ERR("Could not generate key after 3 iterations.\n");
+        status = STATUS_INTERNAL_ERROR;
+        goto done;
+    }
+
+    if (pmpz_cmp(pubkey, psub1) >= 0)
+    {
+        ERR("pubkey > p - 1.\n");
+        status = STATUS_INTERNAL_ERROR;
+        goto done;
+    }
+
+    export_mpz(key_data(key)->d.privkey, key_length, privkey);
+    export_mpz((UCHAR *)((BCRYPT_DH_KEY_BLOB *)key_data(key)->d.pubkey + 1) + 2 * key_length, key_length, pubkey);
+
+done:
+    pmpz_clear(psub1);
+    pmpz_clear(p);
+    pmpz_clear(g);
+    pmpz_clear(pubkey);
+    pmpz_clear(privkey);
+    return status;
+}
+#else
+static NTSTATUS CDECL key_dh_generate( struct key *key )
+{
+    ERR("Compiled without DH support.\n");
+    return STATUS_NOT_IMPLEMENTED;
+}
+#endif
+
 static NTSTATUS key_asymmetric_generate( void *args )
 {
     struct key *key = args;
@@ -961,7 +1281,7 @@ static NTSTATUS key_asymmetric_generate( void *args )
     int ret;
 
     if (!libgnutls_handle) return STATUS_INTERNAL_ERROR;
-    if (key_data(key)->a.privkey) return STATUS_INVALID_HANDLE;
+    if (key->alg_id != ALG_ID_DH && key_data(key)->a.privkey) return STATUS_INVALID_HANDLE;
 
     switch (key->alg_id)
     {
@@ -988,6 +1308,9 @@ static NTSTATUS key_asymmetric_generate( void *args )
         bitlen = GNUTLS_CURVE_TO_BITS( GNUTLS_ECC_CURVE_SECP384R1 );
         break;
 
+    case ALG_ID_DH:
+        return key_dh_generate( key );
+
     default:
         FIXME( "algorithm %u not supported\n", key->alg_id );
         return STATUS_NOT_SUPPORTED;
@@ -1000,6 +1323,7 @@ static NTSTATUS key_asymmetric_generate( void *args )
     }
     if ((ret = pgnutls_pubkey_init( &pubkey )))
     {
+        ERR("gnutls error bitlen %u.\n", bitlen);
         pgnutls_perror( ret );
         pgnutls_privkey_deinit( privkey );
         return STATUS_INTERNAL_ERROR;
@@ -1557,6 +1881,44 @@ static NTSTATUS key_asymmetric_export( void *args )
             return key_export_dsa_capi( key, params->buf, params->len, params->ret_len );
         return STATUS_NOT_IMPLEMENTED;
 
+    case ALG_ID_DH:
+        if (!(key->u.a.flags & KEY_FLAG_FINALIZED)) return STATUS_INVALID_HANDLE;
+        if (flags & KEY_EXPORT_FLAG_DH_PARAMETERS)
+        {
+            BCRYPT_DH_PARAMETER_HEADER *h;
+            unsigned int data_size;
+
+            data_size = sizeof(BCRYPT_DH_PARAMETER_HEADER) + key->u.a.bitlen / 8 * 2;
+            if (params->ret_len) *params->ret_len = data_size;
+            if (!params->buf) return STATUS_SUCCESS;
+            if (params->len < data_size) return STATUS_BUFFER_TOO_SMALL;
+
+            h = (BCRYPT_DH_PARAMETER_HEADER *)params->buf;
+            h->cbLength = data_size;
+            h->dwMagic = BCRYPT_DH_PARAMETERS_MAGIC;
+            h->cbKeyLength = key->u.a.bitlen / 8;
+            memcpy( h + 1, (BCRYPT_DH_KEY_BLOB *)key_data(key)->d.pubkey + 1, h->cbKeyLength * 2);
+        }
+        else
+        {
+            BCRYPT_DH_KEY_BLOB *h = (BCRYPT_DH_KEY_BLOB *)params->buf;
+            BOOL dh_private = flags & KEY_EXPORT_FLAG_DH_FULL;
+
+            *params->ret_len = dh_pubkey_len( key );
+            if (dh_private)
+                *params->ret_len += key->u.a.bitlen / 8;
+
+            if (params->len < *params->ret_len) return STATUS_SUCCESS;
+
+            memcpy(params->buf, key_data(key)->d.pubkey, dh_pubkey_len( key ));
+            if (dh_private)
+                memcpy(params->buf + dh_pubkey_len( key ), key_data(key)->d.privkey, key->u.a.bitlen / 8);
+
+            h->dwMagic = dh_private ? BCRYPT_DH_PRIVATE_MAGIC : BCRYPT_DH_PUBLIC_MAGIC;
+            h->cbKey = key->u.a.bitlen / 8;
+        }
+        return STATUS_SUCCESS;
+
     default:
         FIXME( "algorithm %u not yet supported\n", key->alg_id );
         return STATUS_NOT_IMPLEMENTED;
@@ -1603,6 +1965,49 @@ static NTSTATUS key_asymmetric_import( void *args )
         }
         FIXME( "DSA private key not supported\n" );
         return STATUS_NOT_IMPLEMENTED;
+
+    case ALG_ID_DH:
+        if (flags & KEY_IMPORT_FLAG_DH_PARAMETERS)
+        {
+            const BCRYPT_DH_PARAMETER_HEADER *h = (const BCRYPT_DH_PARAMETER_HEADER *)params->buf;
+            ULONG param_size = sizeof(BCRYPT_DH_PARAMETER_HEADER) + key->u.a.bitlen / 8 * 2;
+
+            if (key->u.a.flags & KEY_FLAG_FINALIZED) return STATUS_INVALID_HANDLE;
+            if (params->len < param_size) return STATUS_BUFFER_TOO_SMALL;
+            if (!h || h->cbLength != param_size || h->dwMagic != BCRYPT_DH_PARAMETERS_MAGIC
+                    || h->cbKeyLength != key->u.a.bitlen / 8)
+                return STATUS_INVALID_PARAMETER;
+
+            dh_key_alloc( key );
+            memcpy((BCRYPT_DH_KEY_BLOB *)key_data(key)->d.pubkey + 1, h + 1, h->cbKeyLength * 2);
+            key->u.a.flags |= KEY_FLAG_DH_PARAMS_SET;
+        }
+        else
+        {
+            BCRYPT_DH_KEY_BLOB *h = (BCRYPT_DH_KEY_BLOB *)params->buf;
+            BOOL dh_private = flags & KEY_IMPORT_FLAG_DH_FULL;
+            ULONG size;
+
+            if (h->dwMagic != (dh_private ? BCRYPT_DH_PRIVATE_MAGIC : BCRYPT_DH_PUBLIC_MAGIC))
+            {
+                WARN("unexpected dwMagic %#x.\n", (int)h->dwMagic);
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            size = sizeof(*h) + h->cbKey * 3;
+            if (dh_private)
+                size += h->cbKey;
+            if (params->len != size) return STATUS_INVALID_PARAMETER;
+            if (h->cbKey * 8 < 512) return STATUS_INVALID_PARAMETER;
+
+            dh_key_alloc( key );
+
+            memcpy( key_data(key)->d.pubkey, params->buf, dh_pubkey_len( key ));
+
+            if (dh_private)
+                memcpy( key_data(key)->d.privkey, params->buf + sizeof(*h) + h->cbKey * 3, h->cbKey);
+        }
+        return STATUS_SUCCESS;
 
     default:
         FIXME( "algorithm %u not yet supported\n", key->alg_id );
@@ -2018,8 +2423,15 @@ static NTSTATUS key_asymmetric_destroy( void *args )
 {
     struct key *key = args;
 
-    if (key_data(key)->a.privkey) pgnutls_privkey_deinit( key_data(key)->a.privkey );
-    if (key_data(key)->a.pubkey) pgnutls_pubkey_deinit( key_data(key)->a.pubkey );
+    if (key->alg_id == ALG_ID_DH)
+    {
+        dh_key_free( key );
+    }
+    else
+    {
+        if (key_data(key)->a.privkey) pgnutls_privkey_deinit( key_data(key)->a.privkey );
+        if (key_data(key)->a.pubkey) pgnutls_pubkey_deinit( key_data(key)->a.pubkey );
+    }
     return STATUS_SUCCESS;
 }
 
@@ -2094,6 +2506,7 @@ static NTSTATUS dup_privkey( struct key *key_orig, struct key *key_copy )
         }
         break;
     }
+
     default:
         ERR( "unhandled algorithm %u\n", key_orig->alg_id );
         return STATUS_INTERNAL_ERROR;
@@ -2187,6 +2600,19 @@ static NTSTATUS key_asymmetric_duplicate( void *args )
     const struct key_asymmetric_duplicate_params *params = args;
     NTSTATUS status;
 
+    if (params->key_orig->alg_id == ALG_ID_DH)
+    {
+        union key_data *s = key_data( params->key_orig );
+        union key_data *d = key_data( params->key_copy );
+        if (s->d.privkey)
+        {
+            dh_key_alloc( params->key_copy );
+            memcpy( d->d.privkey, s->d.privkey, params->key_orig->u.a.bitlen / 8 );
+            memcpy( d->d.pubkey, s->d.pubkey, dh_pubkey_len( params->key_orig ));
+        }
+        return STATUS_SUCCESS;
+    }
+
     if (key_data(params->key_orig)->a.privkey && (status = dup_privkey( params->key_orig, params->key_copy )))
         return status;
 
@@ -2245,6 +2671,82 @@ static NTSTATUS key_asymmetric_encrypt( void *args )
     return status;
 }
 
+static NTSTATUS key_secret_agreement( void *args )
+{
+    struct key_secret_agreement_params *params = args;
+    struct secret *secret;
+    struct key *priv_key;
+    struct key *peer_key;
+    priv_key = params->privkey;
+    peer_key = params->pubkey;
+    secret = params->secret;
+
+    switch (priv_key->alg_id)
+    {
+        case ALG_ID_DH:
+#if defined(HAVE_GMP_H) && defined(SONAME_LIBGMP)
+        {
+            mpz_t p, priv, peer, k;
+            ULONG key_length;
+
+            if (!dh_supported)
+            {
+                ERR("DH is not available.\n");
+                return STATUS_NOT_IMPLEMENTED;
+            }
+
+            key_length = priv_key->u.a.bitlen / 8;
+
+            if (memcmp((BCRYPT_DH_KEY_BLOB *)key_data(priv_key)->d.pubkey + 1,
+                    key_data(peer_key)->d.pubkey + sizeof(BCRYPT_DH_KEY_BLOB), key_length * 2))
+            {
+                ERR("peer DH paramaters do not match.\n");
+                return STATUS_INTERNAL_ERROR;
+            }
+
+            pmpz_init(p);
+            pmpz_init(priv);
+            pmpz_init(peer);
+            pmpz_init(k);
+
+            import_mpz(p, (BCRYPT_DH_KEY_BLOB *)key_data(priv_key)->d.pubkey + 1, key_length);
+            if (pmpz_sizeinbase(p, 2) < 2)
+            {
+                ERR("Invalid prime.\n");
+                pmpz_clear(p);
+                pmpz_clear(priv);
+                pmpz_clear(peer);
+                pmpz_clear(k);
+                return STATUS_INTERNAL_ERROR;
+            }
+            import_mpz(priv, key_data(priv_key)->d.privkey, key_length);
+            import_mpz(peer, key_data(peer_key)->d.pubkey + sizeof(BCRYPT_DH_KEY_BLOB) + key_length * 2, key_length);
+            pmpz_powm(k, peer, priv, p);
+            export_mpz(secret->data, key_length, k);
+            secret->data_len = key_length;
+
+            pmpz_clear(p);
+            pmpz_clear(priv);
+            pmpz_clear(peer);
+            pmpz_clear(k);
+            break;
+        }
+#else
+            ERR_(winediag)("Compiled without DH support.\n");
+            return STATUS_NOT_IMPLEMENTED;
+#endif
+
+        case ALG_ID_ECDH_P256:
+            FIXME("ECDH is not supported.\n");
+            break;
+
+        default:
+            ERR( "unhandled algorithm %u\n", priv_key->alg_id );
+            return STATUS_INVALID_HANDLE;
+    }
+    return STATUS_SUCCESS;
+}
+
 const unixlib_entry_t __wine_unix_call_funcs[] =
 {
     gnutls_process_attach,
@@ -2263,7 +2765,8 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
     key_asymmetric_verify,
     key_asymmetric_destroy,
     key_asymmetric_export,
-    key_asymmetric_import
+    key_asymmetric_import,
+    key_secret_agreement,
 };
 
 #ifdef _WIN64
@@ -2290,6 +2793,13 @@ struct key_asymmetric32
     DSSSEED           dss_seed;
 };
 
+struct secret32
+{
+    struct object hdr;
+    PTR32         data;
+    ULONG         data_len;
+};
+
 struct key32
 {
     struct object hdr;
@@ -2301,6 +2811,44 @@ struct key32
         struct key_asymmetric32 a;
     } u;
 };
+
+union padding
+{
+    BCRYPT_PKCS1_PADDING_INFO pkcs1;
+    BCRYPT_PSS_PADDING_INFO pss;
+};
+
+union padding32
+{
+    struct
+    {
+        PTR32 pszAlgId;
+    } pkcs1;
+    struct
+    {
+        PTR32 pszAlgId;
+        ULONG cbSalt;
+    } pss;
+};
+
+static union padding *get_padding( union padding32 *padding32, union padding *padding, ULONG flags)
+{
+    if (!padding32) return NULL;
+
+    switch (flags)
+    {
+    case BCRYPT_PAD_PKCS1:
+        padding->pkcs1.pszAlgId = ULongToPtr( padding32->pkcs1.pszAlgId );
+        return padding;
+    case BCRYPT_PAD_PSS:
+        padding->pss.pszAlgId = ULongToPtr( padding32->pss.pszAlgId );
+        padding->pss.cbSalt = padding32->pss.cbSalt;
+        return padding;
+    default:
+        break;
+    }
+    return NULL;
+}
 
 static struct key *get_symmetric_key( struct key32 *key32, struct key *key )
 {
@@ -2327,6 +2875,14 @@ static struct key *get_asymmetric_key( struct key32 *key32, struct key *key )
     key->u.a.flags      = key32->u.a.flags;
     key->u.a.dss_seed   = key32->u.a.dss_seed;
     return key;
+}
+
+static struct secret *get_secret( struct secret32 *secret32, struct secret *secret )
+{
+    secret->hdr            = secret32->hdr;
+    secret->data           = ULongToPtr(secret32->data);
+    secret->data_len       = secret32->data_len;
+    return secret;
 }
 
 static void put_symmetric_key32( struct key *key, struct key32 *key32 )
@@ -2576,12 +3132,12 @@ static NTSTATUS wow64_key_asymmetric_sign( void *args )
 
     NTSTATUS ret;
     struct key key;
-    BCRYPT_PKCS1_PADDING_INFO padding;
+    union padding padding;
     struct key32 *key32 = ULongToPtr( params32->key );
     struct key_asymmetric_sign_params params =
     {
         get_asymmetric_key( key32, &key ),
-        NULL, /* padding */
+        get_padding(ULongToPtr( params32->padding ), &padding, params32->flags),
         ULongToPtr(params32->input),
         params32->input_len,
         ULongToPtr(params32->output),
@@ -2589,14 +3145,6 @@ static NTSTATUS wow64_key_asymmetric_sign( void *args )
         ULongToPtr(params32->ret_len),
         params32->flags
     };
-
-    if (params32->flags & BCRYPT_PAD_PKCS1)
-    {
-        PTR32 *info = ULongToPtr( params32->padding );
-        if (!info) return STATUS_INVALID_PARAMETER;
-        padding.pszAlgId = ULongToPtr( *info );
-        params.padding = &padding;
-    }
 
     ret = key_asymmetric_sign( &params );
     put_asymmetric_key32( &key, key32 );
@@ -2618,26 +3166,18 @@ static NTSTATUS wow64_key_asymmetric_verify( void *args )
 
     NTSTATUS ret;
     struct key key;
-    BCRYPT_PKCS1_PADDING_INFO padding;
+    union padding padding;
     struct key32 *key32 = ULongToPtr( params32->key );
     struct key_asymmetric_verify_params params =
     {
         get_asymmetric_key( key32, &key ),
-        NULL, /* padding */
+        get_padding(ULongToPtr( params32->padding ), &padding, params32->flags),
         ULongToPtr(params32->hash),
         params32->hash_len,
         ULongToPtr(params32->signature),
         params32->signature_len,
         params32->flags
     };
-
-    if (params32->flags & BCRYPT_PAD_PKCS1)
-    {
-        PTR32 *info = ULongToPtr( params32->padding );
-        if (!info) return STATUS_INVALID_PARAMETER;
-        padding.pszAlgId = ULongToPtr( *info );
-        params.padding = &padding;
-    }
 
     ret = key_asymmetric_verify( &params );
     put_asymmetric_key32( &key, key32 );
@@ -2706,6 +3246,33 @@ static NTSTATUS wow64_key_asymmetric_import( void *args )
     return ret;
 }
 
+static NTSTATUS wow64_key_secret_agreement( void *args )
+{
+    struct
+    {
+        PTR32 privkey;
+        PTR32 pubkey;
+        PTR32 secret;
+    } const *params32 = args;
+
+    NTSTATUS ret;
+    struct key privkey, pubkey;
+    struct secret secret;
+    struct key32 *privkey32 = ULongToPtr( params32->privkey );
+    struct key32 *pubkey32 = ULongToPtr( params32->pubkey );
+    struct secret32 *secret32 = ULongToPtr( params32->secret );
+    struct key_secret_agreement_params params =
+    {
+        get_asymmetric_key( privkey32, &privkey ),
+        get_asymmetric_key( pubkey32, &pubkey ),
+        get_secret( secret32, &secret ),
+    };
+
+    ret = key_secret_agreement( &params );
+    secret32->data_len = secret.data_len;
+    return ret;
+}
+
 const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
 {
     gnutls_process_attach,
@@ -2724,7 +3291,8 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
     wow64_key_asymmetric_verify,
     wow64_key_asymmetric_destroy,
     wow64_key_asymmetric_export,
-    wow64_key_asymmetric_import
+    wow64_key_asymmetric_import,
+    wow64_key_secret_agreement,
 };
 
 #endif  /* _WIN64 */

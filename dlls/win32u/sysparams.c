@@ -32,6 +32,7 @@
 #include "ntgdi_private.h"
 #include "ntuser_private.h"
 #include "devpropdef.h"
+#include "cfgmgr32.h"
 #include "wine/wingdi16.h"
 #include "wine/server.h"
 
@@ -91,6 +92,30 @@ static const WCHAR devpropkey_gpu_luidW[] =
     '\\','{','6','0','B','1','9','3','C','B','-','5','2','7','6','-','4','D','0','F',
     '-','9','6','F','C','-','F','1','7','3','A','B','A','D','3','E','C','6','}',
     '\\','0','0','0','2'
+};
+
+static const WCHAR devpkey_device_matching_device_id[] =
+{
+    'P','r','o','p','e','r','t','i','e','s',
+    '\\','{','A','8','B','8','6','5','D','D','-','2','E','3','D','-','4','0','9','4',
+    '-','A','D','9','7','-','E','5','9','3','A','7','0','C','7','5','D','6','}',
+    '\\','0','0','0','8'
+};
+
+static const WCHAR devpkey_device_bus_number[] =
+{
+    'P','r','o','p','e','r','t','i','e','s',
+    '\\','{','A','4','5','C','2','5','4','E','-','D','F','1','C','-','4','E','F','D',
+    '-','8','0','2','0','-','6','7','D','1','4','6','A','8','5','0','E','0','}',
+    '\\','0','0','1','7'
+};
+
+static const WCHAR devpkey_device_removal_policy[] =
+{
+    'P','r','o','p','e','r','t','i','e','s',
+    '\\','{','A','4','5','C','2','5','4','E','-','D','F','1','C','-','4','E','F','D',
+    '-','8','0','2','0','-','6','7','D','1','4','6','A','8','5','0','E','0','}',
+    '\\','0','0','2','1'
 };
 
 static const WCHAR devpropkey_device_ispresentW[] =
@@ -871,7 +896,7 @@ static void prepare_devices(void)
                                                 REG_OPTION_VOLATILE, NULL );
 
     /* delete monitors */
-    reg_empty_key( enum_key, "DISPLAY\\DEFAULT_MONITOR" );
+    reg_empty_key( enum_key, "DISPLAY" );
     sprintf( buffer, "Class\\%s", guid_devclass_monitorA );
     hkey = reg_create_key( control_key, bufferW, asciiz_to_unicode( bufferW, buffer ) - sizeof(WCHAR),
                            0, NULL );
@@ -1155,6 +1180,38 @@ static void add_gpu( const struct gdi_gpu *gpu, void *param )
     size = asciiz_to_unicode( bufferW, buffer );
     bufferW[size / sizeof(WCHAR)] = 0; /* for REG_MULTI_SZ */
     set_reg_value( hkey, hardware_idW, REG_MULTI_SZ, bufferW, size + sizeof(WCHAR) );
+
+    if ((subkey = reg_create_key( hkey, devpkey_device_matching_device_id,
+                                  sizeof(devpkey_device_matching_device_id), 0, NULL )))
+    {
+        if (gpu->vendor_id && gpu->device_id)
+            set_reg_value( subkey, NULL, 0xffff0000 | DEVPROP_TYPE_STRING, bufferW, size );
+        else
+            set_reg_value( subkey, NULL, 0xffff0000 | DEVPROP_TYPE_STRING, bufferW,
+                           asciiz_to_unicode( bufferW, "ROOT\\BasicRender" ));
+        NtClose( subkey );
+    }
+
+    if (gpu->vendor_id && gpu->device_id)
+    {
+        if ((subkey = reg_create_key( hkey, devpkey_device_bus_number,
+                                      sizeof(devpkey_device_bus_number), 0, NULL )))
+        {
+            set_reg_value( subkey, NULL, 0xffff0000 | DEVPROP_TYPE_UINT32,
+                           &gpu_index, sizeof(gpu_index) );
+            NtClose( subkey );
+        }
+    }
+
+    if ((subkey = reg_create_key( hkey, devpkey_device_removal_policy,
+                                  sizeof(devpkey_device_removal_policy), 0, NULL )))
+    {
+        unsigned int removal_policy = CM_REMOVAL_POLICY_EXPECT_NO_REMOVAL;
+
+        set_reg_value( subkey, NULL, 0xffff0000 | DEVPROP_TYPE_UINT32,
+                       &removal_policy, sizeof(removal_policy) );
+        NtClose( subkey );
+    }
 
     desc = gpu->name;
     if (!desc[0]) desc = wine_adapterW;
@@ -1559,13 +1616,15 @@ static BOOL update_display_cache_from_registry(void)
 
 static BOOL update_display_cache( BOOL force )
 {
+    static const WCHAR wine_service_station_name[] =
+        {'_','_','w','i','n','e','s','e','r','v','i','c','e','_','w','i','n','s','t','a','t','i','o','n',0};
     HWINSTA winstation = NtUserGetProcessWindowStation();
     struct device_manager_ctx ctx = {0};
-    USEROBJECTFLAGS flags;
+    WCHAR name[MAX_PATH];
 
     /* services do not have any adapters, only a virtual monitor */
-    if (NtUserGetObjectInformation( winstation, UOI_FLAGS, &flags, sizeof(flags), NULL )
-        && !(flags.dwFlags & WSF_VISIBLE))
+    if (NtUserGetObjectInformation( winstation, UOI_NAME, name, sizeof(name), NULL )
+        && !wcscmp( name, wine_service_station_name ))
     {
         pthread_mutex_lock( &display_lock );
         clear_display_devices();
@@ -4923,6 +4982,31 @@ BOOL WINAPI NtUserSystemParametersInfo( UINT action, UINT val, void *ptr, UINT w
 #undef WINE_SPI_WARN
 }
 
+/* CX HACK 19134 */
+#ifdef __APPLE__
+static BOOL is_star_trek_away_team(void)
+{
+    static const WCHAR star_trekW[] = {'S','t','a','r',' ','T','r','e','k','.','e','x','e',0};
+    WCHAR *module_exe, *name = NtCurrentTeb()->Peb->ProcessParameters->ImagePathName.Buffer;
+
+    module_exe = wcsrchr(name, '\\');
+    module_exe = module_exe ? module_exe + 1 : name;
+    return !wcsicmp(module_exe, star_trekW );
+}
+
+static BOOL needs_mouse_hack(void)
+{
+    static BOOL needs_hack, did_check = FALSE;
+
+    if (!did_check) {
+        needs_hack = is_star_trek_away_team();
+        did_check = TRUE;
+    }
+    return needs_hack;
+}
+#endif
+/* End hack */
+
 int get_system_metrics( int index )
 {
     NONCLIENTMETRICSW ncm;
@@ -4979,6 +5063,10 @@ int get_system_metrics( int index )
     case SM_CYKANJIWINDOW:
         return 0;
     case SM_MOUSEPRESENT:
+        /* CX HACK 19134 */
+#ifdef __APPLE__
+        if (needs_mouse_hack()) return 0;
+#endif
         return 1;
     case SM_DEBUG:
         return 0;
@@ -5723,4 +5811,16 @@ NTSTATUS WINAPI NtUserDisplayConfigGetDeviceInfo( DISPLAYCONFIG_DEVICE_INFO_HEAD
         FIXME( "Unimplemented packet type %u.\n", packet->type );
         return STATUS_INVALID_PARAMETER;
     }
+}
+
+NTSTATUS WINAPI __wine_get_current_process_explicit_app_user_model_id( WCHAR *buffer, INT size )
+{
+    /* CW Hack 22310 */
+    return user_driver->pGetCurrentProcessExplicitAppUserModelID( buffer, size );
+}
+
+NTSTATUS WINAPI __wine_set_current_process_explicit_app_user_model_id( const WCHAR *aumid )
+{
+    /* CW Hack 22310 */
+    return user_driver->pSetCurrentProcessExplicitAppUserModelID( aumid );
 }

@@ -55,6 +55,7 @@ typedef enum
     WIN8,    /* Windows 8 */
     WIN81,   /* Windows 8.1 */
     WIN10,   /* Windows 10 */
+    WIN11,   /* Windows 11 */
     NB_WINDOWS_VERSIONS
 } WINDOWS_VERSION;
 
@@ -170,7 +171,11 @@ static const RTL_OSVERSIONINFOEXW VersionData[NB_WINDOWS_VERSIONS] =
         sizeof(RTL_OSVERSIONINFOEXW), 10, 0, 18362, VER_PLATFORM_WIN32_NT,
         L"", 0, 0, VER_SUITE_SINGLEUSERTS, VER_NT_WORKSTATION, 0
     },
-
+    /* WIN11 */
+    {
+        sizeof(RTL_OSVERSIONINFOEXW), 10, 0, 22000, VER_PLATFORM_WIN32_NT,
+        L"", 0, 0, VER_SUITE_SINGLEUSERTS, VER_NT_WORKSTATION, 0
+    },
 };
 
 static const struct { WCHAR name[12]; WINDOWS_VERSION ver; } version_names[] =
@@ -201,6 +206,7 @@ static const struct { WCHAR name[12]; WINDOWS_VERSION ver; } version_names[] =
     { L"win8", WIN8 },
     { L"win81", WIN81 },
     { L"win10", WIN10 },
+    { L"win11", WIN11 },
 };
 
 
@@ -270,18 +276,36 @@ static BOOL get_nt_registry_version( RTL_OSVERSIONINFOEXW *version )
 
     memset( version, 0, sizeof(*version) );
 
-    RtlInitUnicodeString( &valueW, L"CurrentVersion" );
-    if (!NtQueryValueKey( hkey, &valueW, KeyValuePartialInformation, tmp, sizeof(tmp)-1, &count ))
+    RtlInitUnicodeString( &valueW, L"CurrentMajorVersionNumber" );
+    if (!NtQueryValueKey( hkey, &valueW, KeyValuePartialInformation, tmp, sizeof(tmp)-1, &count ) &&
+        info->Type == REG_DWORD)
     {
-        WCHAR *p, *str = (WCHAR *)info->Data;
-        str[info->DataLength / sizeof(WCHAR)] = 0;
-        p = wcschr( str, '.' );
-        if (p)
+        version->dwMajorVersion = *(DWORD *)info->Data;
+
+        RtlInitUnicodeString( &valueW, L"CurrentMinorVersionNumber" );
+        if (!NtQueryValueKey( hkey, &valueW, KeyValuePartialInformation, tmp, sizeof(tmp)-1, &count ) &&
+            info->Type == REG_DWORD)
         {
-            *p++ = 0;
-            version->dwMinorVersion = wcstoul( p, NULL, 10 );
+            version->dwMinorVersion = *(DWORD *)info->Data;
         }
-        version->dwMajorVersion = wcstoul( str, NULL, 10 );
+        else version->dwMajorVersion = 0;
+    }
+
+    if (!version->dwMajorVersion)
+    {
+        RtlInitUnicodeString( &valueW, L"CurrentVersion" );
+        if (!NtQueryValueKey( hkey, &valueW, KeyValuePartialInformation, tmp, sizeof(tmp)-1, &count ))
+        {
+            WCHAR *p, *str = (WCHAR *)info->Data;
+            str[info->DataLength / sizeof(WCHAR)] = 0;
+            p = wcschr( str, '.' );
+            if (p)
+            {
+                *p++ = 0;
+                version->dwMinorVersion = wcstoul( p, NULL, 10 );
+            }
+            version->dwMajorVersion = wcstoul( str, NULL, 10 );
+        }
     }
 
     if (version->dwMajorVersion)   /* we got the main version, now fetch the other fields */
@@ -422,23 +446,11 @@ static BOOL get_win9x_registry_version( RTL_OSVERSIONINFOEXW *version )
 
 
 /**********************************************************************
- *         parse_win_version
- *
- * Parse the contents of the Version key.
+ *         parse_version_string
  */
-static BOOL parse_win_version( HANDLE hkey )
+static BOOL parse_version_string( const WCHAR *name )
 {
-    UNICODE_STRING valueW;
-    WCHAR *name, tmp[64];
-    KEY_VALUE_PARTIAL_INFORMATION *info = (KEY_VALUE_PARTIAL_INFORMATION *)tmp;
-    DWORD i, count;
-
-    RtlInitUnicodeString( &valueW, L"Version" );
-    if (NtQueryValueKey( hkey, &valueW, KeyValuePartialInformation, tmp, sizeof(tmp) - sizeof(WCHAR), &count ))
-        return FALSE;
-
-    name = (WCHAR *)info->Data;
-    name[info->DataLength / sizeof(WCHAR)] = 0;
+    int i;
 
     for (i = 0; i < ARRAY_SIZE(version_names); i++)
     {
@@ -450,6 +462,27 @@ static BOOL parse_win_version( HANDLE hkey )
 
     ERR( "Invalid Windows version value %s specified in config file.\n", debugstr_w(name) );
     return FALSE;
+}
+
+/**********************************************************************
+ *         parse_win_version
+ *
+ * Parse the contents of the Version key.
+ */
+static BOOL parse_win_version( HKEY hkey )
+{
+    UNICODE_STRING valueW;
+    WCHAR *name, tmp[64];
+    KEY_VALUE_PARTIAL_INFORMATION *info = (KEY_VALUE_PARTIAL_INFORMATION *)tmp;
+    DWORD count;
+
+    RtlInitUnicodeString( &valueW, L"Version" );
+    if (NtQueryValueKey( hkey, &valueW, KeyValuePartialInformation, tmp, sizeof(tmp) - sizeof(WCHAR), &count ))
+        return FALSE;
+
+    name = (WCHAR *)info->Data;
+    name[info->DataLength / sizeof(WCHAR)] = 0;
+    return parse_version_string( name );
 }
 
 
@@ -468,6 +501,23 @@ void version_init(void)
     NtQuerySystemInformation( SystemWineVersionInformation, wine_version, sizeof(wine_version), NULL );
 
     current_version = &VersionData[WIN7];
+
+    /* awful CrossOver hack^H^H^H^Hproprietary enhancement */
+    {
+        static const WCHAR cxverW[] = {'C','X','_','W','I','N','D','O','W','S','_','V','E','R','S','I','O','N',0};
+        UNICODE_STRING valueW;
+        WCHAR cxversion[32];
+
+        RtlInitUnicodeString( &nameW, cxverW );
+        valueW.MaximumLength = sizeof(cxversion);
+        valueW.Buffer = cxversion;
+        if (RtlQueryEnvironmentVariable_U(NULL, &nameW, &valueW) == STATUS_SUCCESS)
+        {
+            TRACE( "getting version from CX_WINDOWS_VERSION\n" );
+            got_win_ver = parse_version_string( cxversion );
+            goto done;
+        }
+    }
 
     RtlOpenCurrentUser( KEY_ALL_ACCESS, &root );
     attr.Length = sizeof(attr);

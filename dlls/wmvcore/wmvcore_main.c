@@ -31,18 +31,35 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(wmvcore);
 
+HRESULT create_sync_reader(IUnknown *outer, void **out)
+{
+    HRESULT (WINAPI *p_winegstreamer_create_wm_sync_reader)(IUnknown *outer, void **out);
+    HMODULE module;
+
+    /* This leaks winegstreamer, but currently winegstreamer pins itself anyway,
+     * because glib can't be unloaded, so it doesn't make a difference. */
+
+    if (!(module = LoadLibraryW(L"winegstreamer.dll")))
+    {
+        ERR("Failed to load winegstreamer.\n");
+        return E_NOTIMPL;
+    }
+    p_winegstreamer_create_wm_sync_reader = (void *)GetProcAddress(module, "winegstreamer_create_wm_sync_reader");
+    return p_winegstreamer_create_wm_sync_reader(outer, out);
+}
+
 HRESULT WINAPI WMCreateSyncReader(IUnknown *reserved, DWORD rights, IWMSyncReader **reader)
 {
     TRACE("reserved %p, rights %#lx, reader %p.\n", reserved, rights, reader);
 
-    return winegstreamer_create_wm_sync_reader(NULL, (void **)reader);
+    return create_sync_reader(NULL, (void **)reader);
 }
 
 HRESULT WINAPI WMCreateSyncReaderPriv(IWMSyncReader **reader)
 {
     TRACE("reader %p.\n", reader);
 
-    return winegstreamer_create_wm_sync_reader(NULL, (void **)reader);
+    return create_sync_reader(NULL, (void **)reader);
 }
 
 HRESULT WINAPI WMCheckURLExtension(const WCHAR *url)

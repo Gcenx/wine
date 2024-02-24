@@ -483,6 +483,12 @@ static const struct column col_videocontroller[] =
     { L"VideoModeDescription",        CIM_STRING|COL_FLAG_DYNAMIC },
     { L"VideoProcessor",              CIM_STRING|COL_FLAG_DYNAMIC },
 };
+static const struct column col_serverfeature[] =
+{
+    { L"ID",       CIM_UINT32|COL_FLAG_KEY },
+    { L"ParentID", CIM_UINT32 },
+    { L"Name",     CIM_STRING },
+};
 
 static const struct column col_volume[] =
 {
@@ -932,6 +938,12 @@ struct record_videocontroller
     const WCHAR *videomodedescription;
     const WCHAR *videoprocessor;
 };
+struct record_serverfeature
+{
+    UINT32       id;
+    UINT32       parentid;
+    const WCHAR *name;
+};
 
 struct record_volume
 {
@@ -1081,6 +1093,10 @@ static const struct array systemenclosure_chassistypes_array =
 static const struct record_systemsecurity data_systemsecurity[] =
 {
     { security_get_sd, security_set_sd }
+};
+static const struct record_serverfeature data_serverfeatures[] =
+{
+    { 35, 0, L"Desktop Experience" },
 };
 static const struct record_winsat data_winsat[] =
 {
@@ -3631,6 +3647,7 @@ static WCHAR *get_osbuildnumber( OSVERSIONINFOEXW *ver )
     if (ret) swprintf( ret, 11, L"%u", ver->dwBuildNumber );
     return ret;
 }
+
 static WCHAR *get_oscaption( OSVERSIONINFOEXW *ver )
 {
     static const WCHAR windowsW[] = L"Microsoft Windows ";
@@ -3645,12 +3662,17 @@ static WCHAR *get_oscaption( OSVERSIONINFOEXW *ver )
     static const WCHAR win8W[] = L"8 Pro";
     static const WCHAR win81W[] = L"8.1 Pro";
     static const WCHAR win10W[] = L"10 Pro";
+    static const WCHAR win11W[] = L"11 Pro";
     int len = ARRAY_SIZE( windowsW ) - 1;
     WCHAR *ret;
 
     if (!(ret = malloc( len * sizeof(WCHAR) + sizeof(win2003W) ))) return NULL;
     memcpy( ret, windowsW, sizeof(windowsW) );
-    if (ver->dwMajorVersion == 10 && ver->dwMinorVersion == 0) memcpy( ret + len, win10W, sizeof(win10W) );
+    if (ver->dwMajorVersion == 10 && ver->dwMinorVersion == 0)
+    {
+        if (ver->dwBuildNumber >= 22000) memcpy( ret + len, win11W, sizeof(win11W) );
+        else memcpy( ret + len, win10W, sizeof(win10W) );
+    }
     else if (ver->dwMajorVersion == 6 && ver->dwMinorVersion == 3) memcpy( ret + len, win81W, sizeof(win81W) );
     else if (ver->dwMajorVersion == 6 && ver->dwMinorVersion == 2) memcpy( ret + len, win8W, sizeof(win8W) );
     else if (ver->dwMajorVersion == 6 && ver->dwMinorVersion == 1)
@@ -3672,6 +3694,7 @@ static WCHAR *get_oscaption( OSVERSIONINFOEXW *ver )
     else memcpy( ret + len, win2000W, sizeof(win2000W) );
     return ret;
 }
+
 static WCHAR *get_osname( const WCHAR *caption )
 {
     static const WCHAR partitionW[] = L"|C:\\WINDOWS|\\Device\\Harddisk0\\Partition1";
@@ -3697,6 +3720,7 @@ static WCHAR *get_osversion( OSVERSIONINFOEXW *ver )
     if (ret) swprintf( ret, 33, L"%u.%u.%u", ver->dwMajorVersion, ver->dwMinorVersion, ver->dwBuildNumber );
     return ret;
 }
+
 static DWORD get_operatingsystemsku(void)
 {
     DWORD ret = PRODUCT_UNDEFINED;
@@ -4342,12 +4366,29 @@ static struct table cimv2_builtin_classes[] =
     { L"Win32_WinSAT", C(col_winsat), D(data_winsat) },
 };
 
+static struct table server_feature[] =
+{
+    { L"Win32_ServerFeature", C(col_serverfeature), D(data_serverfeatures) },
+};
+
 static struct table wmi_builtin_classes[] =
 {
     { L"MSSMBios_RawSMBiosTables", C(col_rawsmbiostables), D(data_rawsmbiostables) },
 };
 #undef C
 #undef D
+
+static BOOL is_onenote(void)
+{
+    static const char *onenote = "ONENOTE.EXE";
+    char name[MAX_PATH], *ptr;
+
+    if (!GetModuleFileNameA(NULL, name, sizeof(name)))
+        return FALSE;
+
+    ptr = strstr(name, onenote);
+    return ptr && !ptr[strlen(onenote)];
+}
 
 static const struct
 {
@@ -4372,6 +4413,9 @@ void init_table_list( void )
         list_init( &tables[ns] );
         for (i = 0; i < builtin_namespaces[ns].table_count; i++)
             list_add_tail( &tables[ns], &builtin_namespaces[ns].classes[i].entry );
+        /* CXHACK: 16057 - Client system do not support this class, for some reason OneNote asks for it anyway. */
+        if (!ns && is_onenote())
+            list_add_tail( &tables[ns], &server_feature[0].entry );
         table_list[ns] = &tables[ns];
     }
 }

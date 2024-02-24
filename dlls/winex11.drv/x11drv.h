@@ -935,4 +935,6 @@ static inline UINT asciiz_to_unicode( WCHAR *dst, const char *src )
     return (p - dst) * sizeof(WCHAR);
 }
 
+extern BOOL enable_shm_surface DECLSPEC_HIDDEN;
+
 #endif  /* __WINE_X11DRV_H */

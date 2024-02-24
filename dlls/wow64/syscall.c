@@ -483,10 +483,22 @@ static HMODULE load_64bit_module( const WCHAR *name )
     HMODULE module;
     UNICODE_STRING str;
     WCHAR path[MAX_PATH];
+    UNICODE_STRING name_str, val_str;
     const WCHAR *dir = get_machine_wow64_dir( IMAGE_FILE_MACHINE_TARGET_HOST );
 
-    swprintf( path, MAX_PATH, L"%s\\%s", dir, name );
-    RtlInitUnicodeString( &str, path );
+    /* CW HACK 20810: In Wow64/32-bit-bottle mode, load 64-bit DLLs by name rather than full path */
+    RtlInitUnicodeString( &name_str, L"WINEWOW6432BPREFIXMODE" );
+    val_str.MaximumLength = 0;
+    if (RtlQueryEnvironmentVariable_U( NULL, &name_str, &val_str ) != STATUS_VARIABLE_NOT_FOUND)
+    {
+        RtlInitUnicodeString( &str, name );
+    }
+    else
+    {
+        swprintf( path, MAX_PATH, L"%s\\%s", dir, name );
+        RtlInitUnicodeString( &str, path );
+    }
+
     if ((status = LdrLoadDll( dir, 0, &str, &module )))
     {
         ERR( "failed to load dll %lx\n", status );

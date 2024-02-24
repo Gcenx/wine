@@ -42,6 +42,9 @@ extern BOOL allow_set_gamma DECLSPEC_HIDDEN;
 extern BOOL allow_software_rendering DECLSPEC_HIDDEN;
 extern BOOL disable_window_decorations DECLSPEC_HIDDEN;
 
+/* CrossOver Hack 14364 */
+extern BOOL force_backing_store DECLSPEC_HIDDEN;
+
 extern const char* debugstr_cf(CFTypeRef t) DECLSPEC_HIDDEN;
 
 static inline CGRect cgrect_from_rect(RECT rect)
@@ -134,6 +137,8 @@ extern BOOL macdrv_ClipCursor(LPCRECT clip) DECLSPEC_HIDDEN;
 extern BOOL macdrv_CreateDesktopWindow(HWND hwnd) DECLSPEC_HIDDEN;
 extern LRESULT macdrv_DesktopWindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) DECLSPEC_HIDDEN;
 extern void macdrv_DestroyWindow(HWND hwnd) DECLSPEC_HIDDEN;
+extern NTSTATUS macdrv_SetCurrentProcessExplicitAppUserModelID(LPCWSTR aumid);  /* CW Hack 22310 */
+extern NTSTATUS macdrv_GetCurrentProcessExplicitAppUserModelID(LPWSTR buffer, INT size);  /* CW Hack 22310 */
 extern void macdrv_SetFocus(HWND hwnd) DECLSPEC_HIDDEN;
 extern void macdrv_SetLayeredWindowAttributes(HWND hwnd, COLORREF key, BYTE alpha,
                                               DWORD flags) DECLSPEC_HIDDEN;
@@ -241,6 +246,8 @@ extern void macdrv_release_capture(HWND hwnd, const macdrv_event *event) DECLSPE
 extern void macdrv_SetCapture(HWND hwnd, UINT flags) DECLSPEC_HIDDEN;
 
 extern void macdrv_compute_keyboard_layout(struct macdrv_thread_data *thread_data) DECLSPEC_HIDDEN;
+/* CrossOver Hack 10912: Mac Edit menu */
+extern void macdrv_edit_menu_command(const macdrv_event *event) DECLSPEC_HIDDEN;
 extern void macdrv_keyboard_changed(const macdrv_event *event) DECLSPEC_HIDDEN;
 extern void macdrv_key_event(HWND hwnd, const macdrv_event *event) DECLSPEC_HIDDEN;
 extern void macdrv_hotkey_press(const macdrv_event *event) DECLSPEC_HIDDEN;

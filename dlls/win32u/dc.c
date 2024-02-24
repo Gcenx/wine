@@ -112,7 +112,7 @@ static DC_ATTR *alloc_dc_attr(void)
     {
         SIZE_T size = system_info.AllocationGranularity;
         bucket->entries = NULL;
-        if (!NtAllocateVirtualMemory( GetCurrentProcess(), (void **)&bucket->entries, zero_bits(),
+        if (!NtAllocateVirtualMemory( GetCurrentProcess(), (void **)&bucket->entries, zero_bits,
                                       &size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE ))
         {
             bucket->next_free = NULL;
@@ -717,11 +717,10 @@ HDC WINAPI NtGdiOpenDCW( UNICODE_STRING *device, const DEVMODEW *devmode, UNICOD
     /* gdi_lock should not be locked */
     if (is_display)
         funcs = get_display_driver();
-    else if (hspool)
-    {
-        const struct gdi_dc_funcs * (CDECL *wine_get_gdi_driver)( unsigned int ) = hspool;
-        funcs = wine_get_gdi_driver( WINE_GDI_DRIVER_VERSION );
-    }
+    else if (type != WINE_GDI_DRIVER_VERSION)
+        ERR( "version mismatch: %u\n", (unsigned int)type );
+    else
+        funcs = hspool;
     if (!funcs)
     {
         ERR( "no driver found\n" );
@@ -1474,7 +1473,7 @@ DWORD WINAPI NtGdiSetLayout( HDC hdc, LONG wox, DWORD layout )
 /**********************************************************************
  *           __wine_get_icm_profile     (win32u.@)
  */
-BOOL CDECL __wine_get_icm_profile( HDC hdc, BOOL allow_default, DWORD *size, WCHAR *filename )
+BOOL WINAPI __wine_get_icm_profile( HDC hdc, BOOL allow_default, DWORD *size, WCHAR *filename )
 {
     PHYSDEV physdev;
     DC *dc;

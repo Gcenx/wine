@@ -27,6 +27,12 @@
 #include "vulkan_private.h"
 #include "wine/vulkan_driver.h"
 #include "ntuser.h"
+#include <sys/mman.h>
+
+#ifdef __APPLE__
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#endif
 
 WINE_DEFAULT_DEBUG_CHANNEL(vulkan);
 
@@ -38,13 +44,14 @@ static BOOL is_wow64(void)
 
 static BOOL use_external_memory(void)
 {
+#ifdef __APPLE__
+    return 0;
+#else
     return is_wow64();
+#endif
 }
 
-static ULONG_PTR zero_bits(void)
-{
-    return is_wow64() ? 0x7fffffff : 0;
-}
+static ULONG_PTR zero_bits = 0;
 
 #define wine_vk_count_struct(s, t) wine_vk_count_struct_((void *)s, VK_STRUCTURE_TYPE_##t)
 static uint32_t wine_vk_count_struct_(void *s, VkStructureType t)
@@ -469,6 +476,14 @@ NTSTATUS init_vulkan(void *args)
     {
         ERR("Failed to load Wine graphics driver supporting Vulkan.\n");
         return STATUS_UNSUCCESSFUL;
+    }
+
+    if (is_wow64())
+    {
+        SYSTEM_BASIC_INFORMATION info;
+
+        NtQuerySystemInformation(SystemEmulationBasicInformation, &info, sizeof(info), NULL);
+        zero_bits = (ULONG_PTR)info.HighestUserAddress | 0x7fffffff;
     }
 
     return STATUS_SUCCESS;
@@ -1519,7 +1534,7 @@ VkResult wine_vkAllocateMemory(VkDevice handle, const VkMemoryAllocateInfo *allo
         if (!once++)
             FIXME("Using VK_EXT_external_memory_host\n");
 
-        if (NtAllocateVirtualMemory(GetCurrentProcess(), &mapping, zero_bits(), &alloc_size,
+        if (NtAllocateVirtualMemory(GetCurrentProcess(), &mapping, zero_bits, &alloc_size,
                                     MEM_COMMIT, PAGE_READWRITE))
         {
             ERR("NtAllocateVirtualMemory failed\n");
@@ -1580,9 +1595,25 @@ VkResult wine_vkAllocateMemory(VkDevice handle, const VkMemoryAllocateInfo *allo
         return result;
     }
 
+    memory->size = alloc_info->allocationSize;
     memory->mapping = mapping;
+    memory->mapping_size = 0;
     *ret = (VkDeviceMemory)(uintptr_t)memory;
     return VK_SUCCESS;
+}
+
+static void free_mapping(struct wine_device_memory *memory)
+{
+    SIZE_T size = 0;
+    if (memory->mapping_size)
+    {
+        TRACE("freeing %p\n", memory->mapping);
+        mmap(memory->mapping, memory->mapping_size, PROT_NONE,
+             MAP_PRIVATE | MAP_ANON | MAP_FIXED | MAP_NORESERVE, -1, 0 );
+        NtFreeVirtualMemory(GetCurrentProcess(), &memory->mapping, &size, MEM_RELEASE);
+        memory->mapping = NULL;
+        memory->mapping_size = 0;
+    }
 }
 
 void wine_vkFreeMemory(VkDevice handle, VkDeviceMemory memory_handle, const VkAllocationCallbacks *allocator)
@@ -1594,6 +1625,7 @@ void wine_vkFreeMemory(VkDevice handle, VkDeviceMemory memory_handle, const VkAl
         return;
     memory = wine_device_memory_from_handle(memory_handle);
 
+    free_mapping(memory);
     device->funcs.p_vkFreeMemory(device->device, memory->memory, NULL);
 
     if (memory->mapping)
@@ -1604,6 +1636,49 @@ void wine_vkFreeMemory(VkDevice handle, VkDeviceMemory memory_handle, const VkAl
 
     free(memory);
 }
+
+#ifdef __APPLE__
+
+static void *remap_memory(struct wine_device_memory *memory, void *hostaddr, VkDeviceSize size)
+{
+    vm_prot_t cur_protection, max_protection;
+    mach_vm_address_t lowaddr, base;
+    SIZE_T mapping_size;
+    void *mapping = NULL;
+    kern_return_t kr;
+
+    TRACE("host address %p\n", hostaddr);
+
+    assert(!memory->mapping);
+    /* Get some low memory, then remap it to the host allocation. */
+    base = (vm_map_address_t)hostaddr & ~PAGE_MASK;
+    mapping_size = (size + ((vm_map_offset_t)hostaddr - base) + PAGE_MASK) & ~PAGE_MASK;
+
+    if (NtAllocateVirtualMemory(GetCurrentProcess(), &mapping, zero_bits, &mapping_size,
+                                MEM_RESERVE, PAGE_READWRITE))
+    {
+        WARN("failed to find low memory to remap to\n");
+        return NULL;
+    }
+
+    lowaddr = (UINT_PTR)mapping;
+    if ((kr = mach_vm_remap(mach_task_self(), &lowaddr, mapping_size, 0, VM_FLAGS_FIXED|VM_FLAGS_OVERWRITE,
+                            mach_task_self(), base, FALSE, &cur_protection, &max_protection,
+                            VM_INHERIT_DEFAULT)) != KERN_SUCCESS)
+    {
+        SIZE_T size = 0;
+        WARN("failed to remap memory; Mach error %d\n", kr);
+        NtFreeVirtualMemory(GetCurrentProcess(), &mapping, &size, MEM_RELEASE);
+        return NULL;
+    }
+
+    TRACE("remapped to %p\n", mapping);
+    memory->mapping = mapping;
+    memory->mapping_size = mapping_size;
+    return (void *)(UINT_PTR)(lowaddr + ((vm_map_offset_t)hostaddr - base));
+}
+
+#endif /* __APPLE__ */
 
 VkResult wine_vkMapMemory(VkDevice handle, VkDeviceMemory memory_handle, VkDeviceSize offset,
                           VkDeviceSize size, VkMemoryMapFlags flags, void **data)
@@ -1624,6 +1699,11 @@ VkResult wine_vkMapMemory(VkDevice handle, VkDeviceMemory memory_handle, VkDevic
 #ifdef _WIN64
     if (NtCurrentTeb()->WowTebOffset && result == VK_SUCCESS && (UINT_PTR)*data >> 32)
     {
+#ifdef __APPLE__
+        if ((*data = remap_memory(memory, *data, size == VK_WHOLE_SIZE ? memory->size - offset : size)))
+            return VK_SUCCESS;
+#endif
+
         FIXME("returned mapping %p does not fit 32-bit pointer\n", *data);
         device->funcs.p_vkUnmapMemory(device->device, memory->memory);
         *data = NULL;
@@ -1639,6 +1719,7 @@ void wine_vkUnmapMemory(VkDevice handle, VkDeviceMemory memory_handle)
     struct wine_device *device = wine_device_from_handle(handle);
     struct wine_device_memory *memory = wine_device_memory_from_handle(memory_handle);
 
+    free_mapping(memory);
     if (!memory->mapping)
         device->funcs.p_vkUnmapMemory(device->device, memory->memory);
 }

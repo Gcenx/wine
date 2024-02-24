@@ -335,6 +335,7 @@ static Bool (*pglXQueryVersion)( Display *dpy, int *maj, int *min );
 static Bool (*pglXIsDirect)( Display *dpy, GLXContext ctx );
 static GLXContext (*pglXGetCurrentContext)( void );
 static GLXDrawable (*pglXGetCurrentDrawable)( void );
+static void (*pglXWaitGL)( void );
 
 /* GLX 1.1 */
 static const char *(*pglXQueryExtensionsString)( Display *dpy, int screen );
@@ -591,6 +592,7 @@ static void init_opengl(void)
     LOAD_FUNCPTR(glXIsDirect);
     LOAD_FUNCPTR(glXMakeCurrent);
     LOAD_FUNCPTR(glXSwapBuffers);
+    LOAD_FUNCPTR(glXWaitGL);
     LOAD_FUNCPTR(glXQueryVersion);
 
     /* GLX 1.1 */
@@ -3390,8 +3392,13 @@ static BOOL glxdrv_wglSwapBuffers( HDC hdc )
         break;
     }
 
-    if (escape.gl_drawable && pglXWaitForSbcOML)
-        pglXWaitForSbcOML( gdi_display, gl->drawable, target_sbc, &ust, &msc, &sbc );
+    if (escape.gl_drawable)
+    {
+        if (pglXWaitForSbcOML)
+            pglXWaitForSbcOML( gdi_display, gl->drawable, target_sbc, &ust, &msc, &sbc );
+        else if (pglXWaitGL)
+            pglXWaitGL();
+    }
 
     release_gl_drawable( gl );
 

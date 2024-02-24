@@ -669,7 +669,7 @@ static void sys_command_size_move( HWND hwnd, WPARAM wparam )
     BOOL thickframe, drag_full_windows = TRUE, moved = FALSE;
     RECT sizing_rect, mouse_rect, orig_rect;
     UINT hittest = wparam & 0x0f;
-    UINT syscommand = wparam & 0xfff0;
+    UINT syscommand = wparam & 0xfff0, mmstate;
     UINT style = get_window_long( hwnd, GWL_STYLE );
     POINT capture_point, pt;
     MINMAXINFO minmax;
@@ -788,6 +788,17 @@ static void sys_command_size_move( HWND hwnd, WPARAM wparam )
         {
             NtUserTranslateMessage( &msg, 0 );
             NtUserDispatchMessage( &msg );
+
+            /* It's possible that the window proc that handled the dispatch consumed a
+             * WM_LBUTTONUP. Detect that and terminate the loop as if we'd gotten it. */
+            if (!(NtUserGetKeyState( VK_LBUTTON ) & 0x8000))
+            {
+                DWORD last_pos = NtUserGetThreadInfo()->message_pos;
+                pt.x = ((int)(short)LOWORD( last_pos ));
+                pt.y = ((int)(short)HIWORD( last_pos ));
+                break;
+            }
+
             continue;  /* We are not interested in other messages */
         }
 
@@ -913,6 +924,11 @@ static void sys_command_size_move( HWND hwnd, WPARAM wparam )
                                     orig_rect.bottom - orig_rect.top,
                                     hittest == HTCAPTION ? SWP_NOSIZE : 0 );
         }
+
+        /* CrossOver Hack 10879 */
+        if (hittest != HTCAPTION)
+            NtUserRedrawWindow( hwnd, NULL, NULL,
+                                RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN );
     }
 
     if (is_iconic(hwnd) && !moved && (style & WS_SYSMENU))
@@ -920,6 +936,17 @@ static void sys_command_size_move( HWND hwnd, WPARAM wparam )
         /* Single click brings up the system menu when iconized */
         send_message( hwnd, WM_SYSCOMMAND, SC_MOUSEMENU + HTSYSMENU, MAKELONG(pt.x, pt.y) );
     }
+
+    /* windows finishes this off with a WM_MOUSEMOVE with the current position
+       and buttons state. This message is relied on by some games. */
+    mmstate = 0;
+    if (NtUserGetAsyncKeyState(VK_LBUTTON)&0x1) mmstate &= MK_LBUTTON;
+    if (NtUserGetAsyncKeyState(VK_RBUTTON)&0x1) mmstate &= MK_RBUTTON;
+    if (NtUserGetAsyncKeyState(VK_MBUTTON)&0x1) mmstate &= MK_MBUTTON;
+    if (NtUserGetAsyncKeyState(VK_CONTROL)&0x1) mmstate &= MK_CONTROL;
+    if (NtUserGetAsyncKeyState(VK_SHIFT)&0x1) mmstate &= MK_SHIFT;
+
+    NtUserPostMessage( hwnd, WM_MOUSEMOVE, mmstate, MAKELONG(pt.x,pt.y) );
 }
 
 /***********************************************************************
@@ -2562,8 +2589,9 @@ LRESULT default_window_proc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, 
         break;
 
     case WM_MOUSEWHEEL:
+    case WM_MOUSEHWHEEL:
         if (get_window_long( hwnd, GWL_STYLE ) & WS_CHILD)
-            result = send_message( get_parent( hwnd ), WM_MOUSEWHEEL, wparam, lparam );
+            result = send_message( get_parent( hwnd ), msg, wparam, lparam );
         break;
 
     case WM_ERASEBKGND:

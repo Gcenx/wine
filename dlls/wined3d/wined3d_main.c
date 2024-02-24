@@ -127,6 +127,13 @@ struct wined3d_settings wined3d_settings =
     .max_sm_cs = UINT_MAX,
     .renderer = WINED3D_RENDERER_AUTO,
     .shader_backend = WINED3D_SHADER_BACKEND_AUTO,
+    .multiply_special = 1,
+};
+
+/* CXGames hacks, not in the main wined3d configuration settings */
+struct cxgames_hacks cxgames_hacks =
+{
+    FALSE,                      /* safe_vs_consts */
 };
 
 struct wined3d * CDECL wined3d_create(uint32_t flags)
@@ -334,6 +341,11 @@ static BOOL wined3d_dll_init(HINSTANCE hInstDLL)
     {
         if (!get_config_key_dword(hkey, appkey, env, "csmt", &wined3d_settings.cs_multithreaded))
             ERR_(winediag)("Setting multithreaded command stream to %#x.\n", wined3d_settings.cs_multithreaded);
+        else if (!get_config_key(hkey, appkey, env, "csmt", buffer, size) && !strcmp(buffer,"disabled"))
+        {
+            wined3d_settings.cs_multithreaded = 0;
+            ERR_(winediag)("Disabling multithreaded command stream.\n");
+        }
         if (!get_config_key_dword(hkey, appkey, env, "MaxVersionGL", &tmpvalue))
         {
             ERR_(winediag)("Setting maximum allowed wined3d GL version to %u.%u.\n",
@@ -363,6 +375,27 @@ static BOOL wined3d_dll_init(HINSTANCE hInstDLL)
         {
             ERR_(winediag)("The GLSL shader backend has been disabled. You get to keep all the pieces if it breaks.\n");
             TRACE("Use of GL Shading Language disabled.\n");
+        }
+        if ( !get_config_key( hkey, appkey, env, "hl2_disable_glsl", buffer, size) )
+        {
+            /* This allows disabling GLSL for single HL2 mods(they all use hl2.exe).
+             * It is important that this key is evaluated *after* the UseGLS one,
+             * otherwise the useGLSL key may overwrite decisions made here
+             */
+            char *token;
+            LPSTR cmdline;
+            cmdline = GetCommandLineA();
+            TRACE("Checking command line for disabling GLSL per HL2 mod\n");
+            token = strtok(buffer, ";");
+            while(token) {
+                TRACE("Looking for \"%s\"\n", token);
+                if(strstr(cmdline, token)) {
+                    TRACE("Disabling GLSL for this HL2 mod\n");
+                    wined3d_settings.shader_backend = WINED3D_SHADER_BACKEND_ARB;
+                    break;
+                }
+                token = strtok(NULL, ";");
+            }
         }
         if (!get_config_key(hkey, appkey, env, "OffscreenRenderingMode", buffer, size)
                 && !strcmp(buffer,"backbuffer"))
@@ -424,6 +457,14 @@ static BOOL wined3d_dll_init(HINSTANCE hInstDLL)
         if (!get_config_key_dword(hkey, appkey, env, "SampleCount", &wined3d_settings.sample_count))
             ERR_(winediag)("Forcing sample count to %u. This may not be compatible with all applications.\n",
                     wined3d_settings.sample_count);
+        if ( !get_config_key( hkey, appkey, env, "SafeVsConsts", buffer, size) )
+        {
+            if (!strcmp(buffer,"enable"))
+            {
+                TRACE("Advertising only always available shader constants\n");
+                cxgames_hacks.safe_vs_consts = TRUE;
+            }
+        }
         if (!get_config_key(hkey, appkey, env, "CheckFloatConstants", buffer, size)
                 && !strcmp(buffer, "enabled"))
         {
@@ -432,6 +473,8 @@ static BOOL wined3d_dll_init(HINSTANCE hInstDLL)
         }
         if (!get_config_key_dword(hkey, appkey, env, "strict_shader_math", &wined3d_settings.strict_shader_math))
             ERR_(winediag)("Setting strict shader math to %#x.\n", wined3d_settings.strict_shader_math);
+        if (!get_config_key_dword(hkey, appkey, env, "multiply_special", &wined3d_settings.multiply_special))
+            ERR_(winediag)("Setting multiply special to %#x.\n", wined3d_settings.multiply_special);
         if (!get_config_key_dword(hkey, appkey, env, "MaxShaderModelVS", &wined3d_settings.max_sm_vs))
             TRACE("Limiting VS shader model to %u.\n", wined3d_settings.max_sm_vs);
         if (!get_config_key_dword(hkey, appkey, env, "MaxShaderModelHS", &wined3d_settings.max_sm_hs))

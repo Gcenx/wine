@@ -3308,6 +3308,14 @@ NTSTATUS WINAPI NtQuerySystemInformationEx( SYSTEM_INFORMATION_CLASS class,
             ((DWORD *)info)[i] = MAKELONG( supported_machines[i], flags );
         }
         ((DWORD *)info)[i] = 0;
+
+        /* CW HACK 20810: report i386-only when in 32-bit-bottle/Wow64 mode */
+        if (wow64_using_32bit_prefix)
+        {
+            ((DWORD *)info)[0] = MAKELONG( IMAGE_FILE_MACHINE_I386, 2 | 5 | 8 );
+            ((DWORD *)info)[1] = 0;
+        }
+
         ret = STATUS_SUCCESS;
         break;
     }

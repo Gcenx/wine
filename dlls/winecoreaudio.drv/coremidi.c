@@ -137,6 +137,26 @@ static struct notify_context *notify_read, *notify_write;
 
 #define MAX_MIDI_SYNTHS 1
 
+/* CodeWeavers HACK - bug 5193: Allow disabling of MIDI during bottle
+ * creation and installs. */
+static BOOL MIDI_IsEnabled(void)
+{
+    static BOOL inited;
+    static BOOL enabled = TRUE;
+
+    if (!inited)
+    {
+        if (getenv("CX_DISABLE_COREAUDIO_MIDI"))
+        {
+            TRACE("MIDI support disabled by environment variable.\n");
+            enabled = FALSE;
+        }
+        inited = TRUE;
+    }
+
+    return enabled;
+}
+
 static void midi_in_lock(BOOL lock)
 {
     if (lock) pthread_mutex_lock(&midi_in_mutex);
@@ -314,6 +334,14 @@ NTSTATUS unix_midi_init(void *args)
     struct midi_init_params *params = args;
     OSStatus sc;
     UINT i;
+
+    /* CodeWeavers HACK - bug 5193: Allow disabling of MIDI during bottle
+     * creation and installs. */
+    if (!MIDI_IsEnabled())
+    {
+        *params->err = DRV_SUCCESS;
+        return STATUS_SUCCESS;
+    }
 
     pthread_mutex_lock(&notify_mutex);
     notify_quit = FALSE;
@@ -1126,6 +1154,11 @@ NTSTATUS unix_midi_out_message(void *args)
 {
     struct midi_out_message_params *params = args;
 
+    /* CodeWeavers HACK - bug 5193: Allow disabling of MIDI during bottle
+     * creation and installs. */
+    if (!MIDI_IsEnabled())
+        return MMSYSERR_NOTENABLED;
+
     params->notify->send_notify = FALSE;
 
     switch (params->msg)
@@ -1180,6 +1213,11 @@ NTSTATUS unix_midi_out_message(void *args)
 NTSTATUS unix_midi_in_message(void *args)
 {
     struct midi_in_message_params *params = args;
+
+    /* CodeWeavers HACK - bug 5193: Allow disabling of MIDI during bottle
+     * creation and installs. */
+    if (!MIDI_IsEnabled())
+        return MMSYSERR_NOTENABLED;
 
     params->notify->send_notify = FALSE;
 

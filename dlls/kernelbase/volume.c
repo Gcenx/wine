@@ -207,6 +207,24 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetVolumeInformationW( LPCWSTR root, LPWSTR label,
 
     if (!set_ntstatus( status )) goto done;
 
+    /* CrossOver hack 5870 */
+    if (GetEnvironmentVariableA("CX_HACK_FILESYSTEM_TYPE",NULL,0) > 0)
+    {
+        WCHAR buffer[8];
+
+        if ((ret = GetVolumeInformationByHandleW( handle, label, label_len, serial, filename_len, flags, buffer, 8 )))
+        {
+            if (!wcscmp( buffer, L"NTFS" ))
+            {
+                wcscpy( buffer, L"UNIXFS" );
+                if (flags) *flags = FILE_CASE_PRESERVED_NAMES;
+            }
+            if (fsname) lstrcpynW( fsname, buffer, fsname_len );
+        }
+        NtClose( handle );
+        goto done;
+    }
+
     ret = GetVolumeInformationByHandleW( handle, label, label_len, serial, filename_len, flags,
                                          fsname, fsname_len );
     NtClose( handle );
@@ -433,7 +451,6 @@ BOOL WINAPI DECLSPEC_HOTPATCH DefineDosDeviceW( DWORD flags, const WCHAR *device
  */
 DWORD WINAPI QueryDosDeviceW( LPCWSTR devname, LPWSTR target, DWORD bufsize )
 {
-    UNICODE_STRING nt_name;
     NTSTATUS status;
 
     if (!bufsize)
@@ -471,12 +488,11 @@ DWORD WINAPI QueryDosDeviceW( LPCWSTR devname, LPWSTR target, DWORD bufsize )
     }
     else  /* return a list of all devices */
     {
+        UNICODE_STRING nt_name = RTL_CONSTANT_STRING( L"\\DosDevices" );
         OBJECT_ATTRIBUTES attr;
         HANDLE handle;
         WCHAR *p = target;
 
-        RtlInitUnicodeString( &nt_name, L"\\DosDevices\\" );
-        nt_name.Length -= sizeof(WCHAR);  /* without trailing slash */
         attr.Length = sizeof(attr);
         attr.RootDirectory = 0;
         attr.ObjectName = &nt_name;
@@ -517,12 +533,11 @@ DWORD WINAPI QueryDosDeviceW( LPCWSTR devname, LPWSTR target, DWORD bufsize )
 DWORD WINAPI DECLSPEC_HOTPATCH GetLogicalDrives(void)
 {
     OBJECT_ATTRIBUTES attr;
-    UNICODE_STRING nt_name;
+    UNICODE_STRING nt_name = RTL_CONSTANT_STRING( L"\\DosDevices\\" );
     DWORD bitmask = 0;
     NTSTATUS status;
     HANDLE handle;
 
-    RtlInitUnicodeString( &nt_name, L"\\DosDevices\\" );
     nt_name.Length -= sizeof(WCHAR);  /* without trailing slash */
     attr.Length = sizeof(attr);
     attr.RootDirectory = 0;
@@ -604,6 +619,21 @@ UINT WINAPI DECLSPEC_HOTPATCH GetDriveTypeW( LPCWSTR root )
     }
     else
     {
+        char type_hack[255];
+        DWORD e_ret = GetEnvironmentVariableA("CX_HACK_REMOTE_DRIVES", type_hack, 255);
+        if (e_ret > 0)
+        {
+            char drive;
+            if (root) drive = root[0];
+            else
+            {
+                WCHAR path[MAX_PATH];
+                GetCurrentDirectoryW( MAX_PATH, path );
+                drive = path[0];
+            }
+            if (strchr( type_hack, tolower(drive) )) return DRIVE_REMOTE;
+        }
+
         switch (info.DeviceType)
         {
         case FILE_DEVICE_CD_ROM_FILE_SYSTEM:  ret = DRIVE_CDROM; break;

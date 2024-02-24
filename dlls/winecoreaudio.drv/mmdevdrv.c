@@ -199,6 +199,8 @@ BOOL WINAPI DllMain(HINSTANCE dll, DWORD reason, void *reserved)
         DisableThreadLibraryCalls(dll);
         if (__wine_init_unix_call())
             return FALSE;
+        if (WINE_UNIX_CALL(process_attach, NULL))
+            return FALSE;
         g_timer_q = CreateTimerQueue();
         if(!g_timer_q)
             return FALSE;

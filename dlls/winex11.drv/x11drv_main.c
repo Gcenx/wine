@@ -311,13 +311,16 @@ static int error_handler( Display *display, XErrorEvent *error_evt )
                error_evt->error_code, error_evt->request_code );
         return 0;
     }
+    ERR("XERROR: code %d request %d minor %d xid %08lx\n",
+        error_evt->error_code,
+        error_evt->request_code,
+        error_evt->minor_code,
+        error_evt->resourceid);
     if (TRACE_ON(synchronous))
     {
-        ERR( "X protocol error: serial=%ld, request_code=%d - breaking into debugger\n",
-             error_evt->serial, error_evt->request_code );
+        old_error_handler( display, error_evt );
         assert( 0 );
     }
-    old_error_handler( display, error_evt );
     return 0;
 }
 
@@ -443,6 +446,8 @@ static inline DWORD get_config_key( HKEY defkey, HKEY appkey, const char *name,
  */
 static void setup_options(void)
 {
+    static const WCHAR steamwebhelperW[] = {'s','t','e','a','m','w','e','b','h','e','l','p','e','r','.','e','x','e',0};
+    static const WCHAR steamW[] = {'s','t','e','a','m','.','e','x','e',0};
     static const WCHAR x11driverW[] = {'\\','X','1','1',' ','D','r','i','v','e','r',0};
     WCHAR buffer[MAX_PATH+16], *p, *appname;
     HKEY hkey, appkey = 0;
@@ -474,6 +479,9 @@ static void setup_options(void)
             appkey = reg_open_key( tmpkey, appname, lstrlenW( appname ) * sizeof(WCHAR) );
             NtClose( tmpkey );
         }
+
+        if (!wcscmp(appname, steamwebhelperW) || !wcscmp(appname, steamW))
+            enable_shm_surface = TRUE;
     }
 
     if (!get_config_key( hkey, appkey, "Managed", buffer, sizeof(buffer) ))

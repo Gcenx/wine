@@ -28,6 +28,7 @@
 
 #include <Security/AuthSession.h>
 #include <IOKit/pwr_mgt/IOPMLib.h>
+#include <unistd.h> /* CrossOver Hack 11095 */
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
@@ -47,6 +48,8 @@ int capture_displays_for_fullscreen = 0;
 BOOL skip_single_buffer_flushes = FALSE;
 BOOL allow_vsync = TRUE;
 BOOL allow_set_gamma = TRUE;
+/* CrossOver Hack 10912: Mac Edit menu */
+int mac_edit_menu = MAC_EDIT_MENU_BY_KEY;
 int left_option_is_alt = 0;
 int right_option_is_alt = 0;
 int left_command_is_ctrl = 0;
@@ -60,6 +63,9 @@ int use_precise_scrolling = TRUE;
 int gl_surface_mode = GL_SURFACE_IN_FRONT_OPAQUE;
 int retina_enabled = FALSE;
 int enable_app_nap = FALSE;
+
+/* CrossOver Hack 14364 */
+BOOL force_backing_store = FALSE;
 
 CFDictionaryRef localized_strings;
 
@@ -329,6 +335,18 @@ static void setup_options(void)
     if (!get_config_key(hkey, appkey, "AllowSetGamma", buffer, sizeof(buffer)))
         allow_set_gamma = IS_OPTION_TRUE(buffer[0]);
 
+    /* CrossOver Hack 10912: Mac Edit menu */
+    if (!get_config_key(hkey, appkey, "EditMenu", buffer, sizeof(buffer)))
+    {
+        static const WCHAR messageW[] = {'m','e','s','s','a','g','e',0};
+        static const WCHAR keyW[] = {'k','e','y',0};
+        if (!wcscmp(buffer, messageW))
+            mac_edit_menu = MAC_EDIT_MENU_BY_MESSAGE;
+        else if (!wcscmp(buffer, keyW))
+            mac_edit_menu = MAC_EDIT_MENU_BY_KEY;
+        else
+            mac_edit_menu = MAC_EDIT_MENU_DISABLED;
+    }
     if (!get_config_key(hkey, appkey, "LeftOptionIsAlt", buffer, sizeof(buffer)))
         left_option_is_alt = IS_OPTION_TRUE(buffer[0]);
     if (!get_config_key(hkey, appkey, "RightOptionIsAlt", buffer, sizeof(buffer)))
@@ -383,6 +401,12 @@ static void setup_options(void)
     if (!get_config_key(hkey, NULL, "RetinaMode", buffer, sizeof(buffer)))
         retina_enabled = IS_OPTION_TRUE(buffer[0]);
 
+    retina_on = retina_enabled;
+
+    /* CrossOver Hack 14364 */
+    if (!get_config_key(hkey, appkey, "ForceOpenGLBackingStore", buffer, sizeof(buffer)))
+        force_backing_store = IS_OPTION_TRUE(buffer[0]);
+
     if (appkey) NtClose(appkey);
     if (hkey) NtClose(hkey);
 }
@@ -432,6 +456,17 @@ static NTSTATUS macdrv_init(void *arg)
     struct init_params *params = arg;
     SessionAttributeBits attributes;
     OSStatus status;
+
+    /* CrossOver Hack 11095.  Cocoa makes a similar call to confstr() during
+       its first pass through the event loop, which happens on the main thread.
+       However, if Wine is double-fork()-ing on a background thread simultaneously
+       with the first such call, the child process can become deadlocked.  It
+       appears to be a bug in the system library.
+
+       By calling this here, we greatly reduce the likelihood of such a race
+       and deadlock. */
+    char dummy[256];
+    confstr(_CS_DARWIN_USER_CACHE_DIR, dummy, sizeof(dummy));
 
     status = SessionGetInfo(callerSecuritySession, NULL, &attributes);
     if (status != noErr || !(attributes & sessionHasGraphicAccess))
@@ -596,6 +631,25 @@ BOOL macdrv_SystemParametersInfo( UINT action, UINT int_param, void *ptr_param, 
     return FALSE;
 }
 
+/* CW Hack 22310 */
+NTSTATUS macdrv_SetCurrentProcessExplicitAppUserModelID(const WCHAR *aumid)
+{
+    if (!macdrv_set_current_process_explicit_app_user_model_id(aumid, lstrlenW(aumid)))
+        return STATUS_INVALID_PARAMETER;
+
+    return 0;
+}
+
+/* CW Hack 22310 */
+NTSTATUS macdrv_GetCurrentProcessExplicitAppUserModelID(WCHAR *buffer, INT size)
+{
+    if (!buffer) return STATUS_INVALID_PARAMETER;
+
+    if (!macdrv_get_current_process_explicit_app_user_model_id(buffer, size))
+        return STATUS_BUFFER_TOO_SMALL;
+
+    return 0;
+}
 
 NTSTATUS macdrv_client_func(enum macdrv_client_funcs id, const void *params, ULONG size)
 {

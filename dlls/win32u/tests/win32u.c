@@ -706,9 +706,13 @@ static LRESULT WINAPI test_ipc_message_proc( HWND hwnd, UINT msg, WPARAM wparam,
 
     case WM_GETTEXT:
     case EM_GETLINE:
-    case CB_GETLBTEXT:
         ok( wparam == 100, "wparam = %Iu\n", wparam );
         wcscpy( (void *)lparam, L"Test" );
+        return 4;
+
+    case CB_GETLBTEXT:
+        ok( wparam == 100, "wparam = %Iu\n", wparam );
+        wcscpy( (void *)lparam, L"Te" );
         return 4;
 
     case WM_GETTEXTLENGTH:
@@ -800,6 +804,13 @@ static void test_inter_process_child( HWND hwnd )
     todo_wine
     ok( buf[1] == (char)0xcc, "buf[1] = %x\n", buf[1] );
 
+    memset( bufW, 0xcc, sizeof(bufW) );
+    res = NtUserMessageCall( hwnd, CB_GETLBTEXT, 100, (LPARAM)bufW, NULL, NtUserSendMessage, FALSE );
+    todo_wine
+    ok( res == 1, "res = %d\n", res );
+    ok( bufW[0] == 'T', "bufW[0] = %c\n", buf[0] );
+    ok( bufW[1] && buf[1] != 'e', "bufW[1] = %x\n", buf[1] );
+
     memset( buf, 0xcc, sizeof(buf) );
     *(DWORD *)buf = ARRAYSIZE(buf);
     res = NtUserMessageCall( hwnd, EM_GETLINE, sizeof(buf), (LPARAM)buf, NULL, NtUserSendMessage, TRUE );
@@ -820,6 +831,673 @@ static void test_inter_process_child( HWND hwnd )
     ok( res == 0xdeadbeef, "res = %d\n", res );
 
     PostMessageA( hwnd, WM_USER, 0, 0 );
+}
+
+struct lparam_hook_test
+{
+    const char *name;
+    UINT message;
+    WPARAM wparam;
+    BOOL no_wparam_check;
+    LRESULT msg_result;
+    LRESULT check_result;
+    BOOL todo_result;
+    const void *lparam;
+    const void *change_lparam;
+    const void *check_lparam;
+    const void *in_lparam;
+    size_t lparam_size;
+    size_t lparam_init_size;
+    size_t check_size;
+    BOOL poison_lparam;
+    BOOL not_allowed;
+};
+
+static const struct lparam_hook_test *current_hook_test;
+
+static LPARAM callwnd_hook_lparam, callwnd_hook_lparam2, retwnd_hook_lparam, retwnd_hook_lparam2;
+static LPARAM wndproc_lparam;
+static char lparam_buffer[521];
+
+static void check_params( const struct lparam_hook_test *test, UINT message,
+                         WPARAM wparam, LPARAM lparam, BOOL is_ret )
+{
+    if (!test->no_wparam_check)
+        ok( wparam == test->wparam, "got wparam %Ix, expected %Ix\n", wparam, test->wparam );
+    if (lparam == (LPARAM)lparam_buffer)
+        return;
+
+    if (sizeof(void *) != 4 || (test->message != EM_SETTABSTOPS && test->message != LB_SETTABSTOPS))
+        ok( (LPARAM)&message < lparam && lparam < (LPARAM)NtCurrentTeb()->Tib.StackBase,
+            "lparam is not on the stack\n");
+
+    switch (test->message)
+    {
+    case WM_COPYDATA:
+        {
+            const COPYDATASTRUCT *cds = (const COPYDATASTRUCT *)lparam;
+            const COPYDATASTRUCT *cds_in = (const COPYDATASTRUCT *)lparam_buffer;
+            ok( cds->dwData == cds_in->dwData, "cds->dwData != cds_in->dwData\n");
+            ok( cds->cbData == cds_in->cbData, "cds->dwData != cds_in->dwData\n");
+            if (cds_in->lpData)
+            {
+                ok( cds->lpData != cds_in->lpData, "cds->lpData == cds_in->lpData\n" );
+                if (cds->cbData)
+                    ok( !memcmp( cds->lpData, cds_in->lpData, cds->cbData ), "unexpected pvData %s\n",
+                        wine_dbgstr_an( cds->lpData, cds->cbData ));
+            }
+            else
+                ok( !cds->lpData, "cds->lpData = %p\n", cds->lpData );
+        }
+        break;
+
+    case EM_GETSEL:
+    case SBM_GETRANGE:
+    case CB_GETEDITSEL:
+        ok( wparam, "wparam = 0\n" );
+        break;
+
+    case EM_GETLINE:
+        if (!is_ret)
+        {
+            WCHAR *buf = (WCHAR *)lparam;
+            ok(buf[0] == 8, "buf[0] = %x\n", buf[0]);
+        }
+        break;
+
+    default:
+        if (test->check_size) {
+            const void *expected;
+            if (is_ret && test->check_lparam)
+                expected = test->check_lparam;
+            else if (is_ret && test->change_lparam)
+                expected = test->change_lparam;
+            else if (test->in_lparam)
+                expected = test->in_lparam;
+            else
+                expected = test->lparam;
+            ok( !memcmp( (const void *)lparam, expected, test->check_size ), "unexpected lparam content\n" );
+        }
+    }
+}
+
+static void poison_lparam( const struct lparam_hook_test *test, LPARAM lparam )
+{
+    /* message copy is never transfered back in hooks */
+    if (test->lparam_size && lparam != (LPARAM)lparam_buffer)
+        memset( (void *)lparam, 0xc0, test->lparam_size );
+}
+
+static LRESULT WINAPI callwnd_hook_proc( INT code, WPARAM wparam, LPARAM lparam )
+{
+    const struct lparam_hook_test *test = current_hook_test;
+    CWPSTRUCT *cwp = (CWPSTRUCT *)lparam;
+    LRESULT result;
+
+    if (cwp->message != test->message) return CallNextHookEx( NULL, code, wparam, lparam );
+
+    callwnd_hook_lparam = cwp->lParam;
+    winetest_push_context( "call_hook" );
+    check_params( test, cwp->message, cwp->wParam, cwp->lParam, FALSE );
+    winetest_pop_context();
+
+    result = CallNextHookEx( NULL, code, wparam, lparam );
+
+    poison_lparam( test, cwp->lParam );
+    return result;
+}
+
+static LRESULT WINAPI callwnd_hook_proc2( INT code, WPARAM wparam, LPARAM lparam )
+{
+    const struct lparam_hook_test *test = current_hook_test;
+    CWPSTRUCT *cwp = (CWPSTRUCT *)lparam;
+    LRESULT result;
+
+    if (cwp->message != test->message) return CallNextHookEx( NULL, code, wparam, lparam );
+
+    callwnd_hook_lparam2 = cwp->lParam;
+    winetest_push_context( "call_hook2" );
+    check_params( test, cwp->message, cwp->wParam, cwp->lParam, FALSE );
+    winetest_pop_context();
+
+    result = CallNextHookEx( NULL, code, wparam, lparam );
+
+    poison_lparam( test, cwp->lParam );
+    return result;
+}
+
+static LRESULT WINAPI retwnd_hook_proc( INT code, WPARAM wparam, LPARAM lparam )
+{
+    const struct lparam_hook_test *test = current_hook_test;
+    CWPRETSTRUCT *cwpret = (CWPRETSTRUCT *)lparam;
+    LRESULT result;
+
+    if (cwpret->message != test->message) return CallNextHookEx( NULL, code, wparam, lparam );
+
+    retwnd_hook_lparam = cwpret->lParam;
+    winetest_push_context( "ret_hook" );
+    check_params( test, cwpret->message, cwpret->wParam, cwpret->lParam, TRUE );
+    winetest_pop_context();
+
+    result = CallNextHookEx( NULL, code, wparam, lparam );
+
+    poison_lparam( test, cwpret->lParam );
+    return result;
+}
+
+static LRESULT WINAPI retwnd_hook_proc2( INT code, WPARAM wparam, LPARAM lparam )
+{
+    const struct lparam_hook_test *test = current_hook_test;
+    CWPRETSTRUCT *cwpret = (CWPRETSTRUCT *)lparam;
+    LRESULT result;
+
+    if (cwpret->message != test->message) return CallNextHookEx( NULL, code, wparam, lparam );
+
+    retwnd_hook_lparam2 = cwpret->lParam;
+    winetest_push_context( "ret_hook2" );
+    check_params( test, cwpret->message, cwpret->wParam, cwpret->lParam, TRUE );
+    winetest_pop_context();
+
+    result = CallNextHookEx( NULL, code, wparam, lparam );
+
+    poison_lparam( test, cwpret->lParam );
+    return result;
+}
+
+static LRESULT WINAPI lparam_test_proc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam )
+{
+    const struct lparam_hook_test *test = current_hook_test;
+
+    if (test && msg == test->message)
+    {
+        wndproc_lparam = lparam;
+
+        winetest_push_context( "wndproc" );
+        check_params( test, msg, wparam, lparam, FALSE );
+        winetest_pop_context();
+
+        if (test->change_lparam) memcpy( (void *)lparam, test->change_lparam, test->lparam_size );
+        else if(test->poison_lparam) memset( (void *)lparam, 0xcc, test->lparam_size );
+        return test->msg_result;
+    }
+
+    switch (msg)
+    {
+    case CB_GETLBTEXTLEN:
+    case LB_GETTEXTLEN:
+        return 7;
+    }
+
+    return DefWindowProcW( hwnd, msg, wparam, lparam );
+}
+
+static void test_msg_output( const struct lparam_hook_test *test, LRESULT result, BOOL hooks_called )
+{
+    const LPARAM orig = (LPARAM)lparam_buffer;
+    const void *expected;
+
+    /* Some messages are not allowed with NtUserMessageCall, they seem to be reserved
+     * for system. Unhooked SendMessage still works for them. */
+    if (test->not_allowed)
+    {
+        todo_wine ok( !wndproc_lparam, "wndproc_lparam called\n" );
+        return;
+    }
+
+    ok( wndproc_lparam, "wndproc_lparam not called\n" );
+
+    if (test->check_result)
+        todo_wine_if(test->todo_result)
+        ok( result == test->check_result, "unexpected result %Ix\n", result );
+    else
+        todo_wine_if(test->todo_result)
+        ok( result == test->msg_result, "unexpected result %Ix\n", result );
+
+    if (!test->lparam_size)
+    {
+        ok( wndproc_lparam == orig, "wndproc_lparam modified\n" );
+        if (hooks_called)
+        {
+            ok( callwnd_hook_lparam == orig, "callwnd_hook_lparam modified\n" );
+            ok( callwnd_hook_lparam2 == orig, "callwnd_hook_lparam2 modified\n" );
+            ok( retwnd_hook_lparam == orig, "retwnd_hook_lparam modified\n" );
+            ok( retwnd_hook_lparam2 == orig, "retwnd_hook_lparam2 modified\n" );
+        }
+        return;
+    }
+
+    expected = test->change_lparam ? test->change_lparam : test->lparam;
+    if (test->check_lparam)
+        expected = test->check_lparam;
+    else if(test->change_lparam)
+        expected = test->change_lparam;
+    else
+        expected = test->lparam;
+    if (expected)
+        todo_wine_if((test->message == CB_GETLBTEXT && test->msg_result == 7) ||
+                     (test->message == LB_GETTEXT && test->msg_result == 7))
+        ok( !memcmp( lparam_buffer, expected, test->lparam_size ), "unexpected lparam content\n" );
+
+    ok( wndproc_lparam != orig, "wndproc_lparam unmodified\n" );
+    if (!hooks_called)
+        return;
+
+    ok( callwnd_hook_lparam, "callwnd_hook_lparam not called\n" );
+    ok( callwnd_hook_lparam2, "callwnd_hook_lparam2 not called\n" );
+    ok( retwnd_hook_lparam, "retwnd_hook_lparam not called\n" );
+    ok( retwnd_hook_lparam2, "retwnd_hook_lparam2 not called\n" );
+
+    ok( orig != callwnd_hook_lparam, "callwnd_hook_lparam not modified\n" );
+    ok( orig != callwnd_hook_lparam2, "callwnd_hook_lparam2 not modified\n" );
+    ok( orig != retwnd_hook_lparam, "retwnd_hook_lparam not modified\n" );
+    ok( orig != retwnd_hook_lparam2, "retwnd_hook_lparam2 not modified\n" );
+
+    /*
+     * Only the first hook's lparam matches window proc, following hook
+     * calls copy the message again. Even when lparam values match, they
+     * are copied separatelly for each proc invocation. Poisoning their
+     * content in hook procs has no effect on other calls.
+     */
+    ok( wndproc_lparam == callwnd_hook_lparam, "wndproc_lparam %Ix != callwnd_hook_lparam %Ix\n",
+        wndproc_lparam, callwnd_hook_lparam);
+    todo_wine
+    ok( callwnd_hook_lparam != callwnd_hook_lparam2, "wndproc_lparam == callwnd_hook_lparam2\n" );
+    ok( wndproc_lparam == retwnd_hook_lparam, "wndproc_lparam %Ix != retwnd_hook_lparam %Ix\n",
+        wndproc_lparam, retwnd_hook_lparam);
+    todo_wine
+    ok( retwnd_hook_lparam != retwnd_hook_lparam2, "wndproc_lparam == retwnd_hook_lparam2\n"  );
+}
+
+static void init_hook_test( const struct lparam_hook_test *test )
+{
+    wndproc_lparam = 0;
+    callwnd_hook_lparam = 0;
+    callwnd_hook_lparam2 = 0;
+    retwnd_hook_lparam = 0;
+    retwnd_hook_lparam2 = 0;
+
+    if (test->lparam_size)
+    {
+        if (test->lparam_init_size)
+            memcpy( lparam_buffer, test->lparam, test->lparam_init_size );
+        else if (test->lparam)
+            memcpy( lparam_buffer, test->lparam, test->lparam_size );
+        else
+            memset( lparam_buffer, 0xcc, test->lparam_size );
+    }
+}
+
+static void test_wndproc_hook(void)
+{
+    const struct lparam_hook_test *test;
+    HHOOK call_hook, call_hook2, ret_hook, ret_hook2;
+    WNDCLASSW cls = { 0 };
+    LRESULT res;
+    HWND hwnd;
+    BOOL ret;
+
+    static const BOOL false_lparam = FALSE;
+    static const WCHAR strbufW[8] = L"abc\0defg";
+    static const WCHAR strbuf2W[8] = L"\0\xcccc\xcccc\xcccc\xcccc\xcccc\xcccc\xcccc";
+    static const WCHAR strbuf3W[8] = L"abcdefgh";
+    static const WCHAR strbuf4W[8] = L"abc\0\xcccc\xcccc\xcccc\xcccc";
+    static const RECT rect_in = { 1, 2, 100, 200 };
+    static const RECT rect_out = { 3, 4, 110, 220 };
+    static const MINMAXINFO minmax_in = { .ptMinTrackSize.x = 1 };
+    static const MINMAXINFO minmax_out = { .ptMinTrackSize.x = 2 };
+    static const DRAWITEMSTRUCT drawitem_in = { .itemID = 1 };
+    static const MEASUREITEMSTRUCT mis_in = { .itemID = 1 };
+    static const MEASUREITEMSTRUCT mis_out = { .itemID = 2, .CtlType = 3, .CtlID = 4, .itemData = 5 };
+    static const DELETEITEMSTRUCT dis_in = { .itemID = 1 };
+    static const COMPAREITEMSTRUCT cis_in = { .itemID1 = 1 };
+    static const WINDOWPOS winpos_in = { .x = 1, .cy = 2 };
+    static const WINDOWPOS winpos_out = { .x = 10, .cy = 22 };
+    static const COPYDATASTRUCT cds_in = { .dwData = 1 };
+    static WORD data_word = 3;
+    static const COPYDATASTRUCT cds2_in = { .cbData = 2, .lpData = &data_word };
+    static const COPYDATASTRUCT cds3_in = { .dwData = 2, .lpData = (void *)0xdeadbeef };
+    static const COPYDATASTRUCT cds4_in = { .cbData = 2 };
+    static const COPYDATASTRUCT cds5_in = { .lpData = (void *)0xdeadbeef };
+    static const STYLESTRUCT style_in = { .styleOld = 1, .styleNew = 2 };
+    static const STYLESTRUCT style_out = { .styleOld = 10, .styleNew = 20 };
+    static const MSG msg_in = { .wParam = 1, .lParam = 2 };
+    static const SCROLLINFO si_in = { .cbSize = sizeof(si_in), .nPos = 6 };
+    static const SCROLLINFO si_out = { .cbSize = sizeof(si_in), .nPos = 60 };
+    static const SCROLLBARINFO sbi_in = { .xyThumbTop = 6 };
+    static const SCROLLBARINFO sbi_out = { .xyThumbTop = 60 };
+    static const DWORD dw_in = 1, dw_out = 2;
+    static const UINT32 tabstops_in[2] = { 3, 4 };
+    static const UINT32 items_out[2] = { 1, 2 };
+    static const MDINEXTMENU nm_in = { .hmenuIn = (HMENU)0xdeadbeef };
+    static const MDINEXTMENU nm_out = { .hmenuIn = (HMENU)1 };
+    static const MDICREATESTRUCTW mcs_in = { .x = 1, .y = 2 };
+    static const COMBOBOXINFO cbi_in = { .cbSize = 1, .hwndList = HWND_MESSAGE };
+    static const COMBOBOXINFO cbi_check =
+        { .cbSize = sizeof(void *) == 4 ? sizeof(cbi_in) : 1, .hwndList = HWND_MESSAGE };
+    static const COMBOBOXINFO cbi_out = { .hwndList = (HWND)2 };
+    static const COMBOBOXINFO cbi_ret = { .hwndList = (HWND)2,
+        .cbSize = sizeof(void *) == 4 ? sizeof(cbi_in) : 0 };
+
+    static const struct lparam_hook_test lparam_hook_tests[] =
+    {
+        {
+            "WM_NCCALCSIZE", WM_NCCALCSIZE,
+            .lparam = &rect_in, .lparam_size = sizeof(RECT), .change_lparam = &rect_out,
+            .check_size = sizeof(RECT),
+        },
+        {
+            "WM_MOVING", WM_MOVING,
+            .lparam = &rect_in, .lparam_size = sizeof(RECT), .change_lparam = &rect_out,
+            .check_size = sizeof(RECT),
+        },
+        {
+            "WM_SIZING", WM_SIZING,
+            .lparam = &rect_in, .lparam_size = sizeof(RECT), .change_lparam = &rect_out,
+            .check_size = sizeof(RECT),
+        },
+        {
+            "EM_GETRECT", EM_GETRECT,
+            .lparam = &rect_in, .lparam_size = sizeof(RECT), .change_lparam = &rect_out,
+        },
+        {
+            "EM_SETRECT", EM_SETRECT,
+            .lparam = &rect_in, .lparam_size = sizeof(RECT), .change_lparam = &rect_out,
+            .check_size = sizeof(RECT),
+        },
+        {
+            "EM_SETRECTNP", EM_SETRECTNP,
+            .lparam = &rect_in, .lparam_size = sizeof(RECT), .change_lparam = &rect_out,
+            .check_size = sizeof(RECT),
+        },
+        {
+            "LB_GETITEMRECT", LB_GETITEMRECT,
+            .lparam = &rect_in, .lparam_size = sizeof(RECT), .change_lparam = &rect_out,
+            .check_size = sizeof(RECT),
+        },
+        {
+            "CB_GETDROPPEDCONTROLRECT", CB_GETDROPPEDCONTROLRECT,
+            .lparam = &rect_in, .lparam_size = sizeof(RECT), .change_lparam = &rect_out,
+        },
+        {
+            "WM_GETTEXT", WM_GETTEXT, .wparam = 8,
+            .lparam_size = sizeof(strbufW), .change_lparam = strbufW, .check_lparam = strbuf2W,
+        },
+        {
+            "WM_GETTEXT2", WM_GETTEXT, .wparam = 8, .msg_result = 1,
+            .lparam_size = sizeof(strbufW), .change_lparam = strbufW, .check_lparam = strbuf4W,
+        },
+        {
+            "WM_GETTEXT3", WM_GETTEXT, .wparam = 8, .msg_result = 9,
+            .lparam_size = sizeof(strbufW), .change_lparam = strbufW, .check_lparam = strbuf4W,
+        },
+        {
+            "WM_ASKCBFORMATNAME", WM_ASKCBFORMATNAME, .wparam = 8,
+            .lparam_size = sizeof(strbufW), .change_lparam = strbufW, .check_lparam = strbuf4W,
+        },
+        {
+            "WM_ASKCBFORMATNAME2", WM_ASKCBFORMATNAME, .wparam = 8, .msg_result = 1,
+            .lparam_size = sizeof(strbufW), .change_lparam = strbufW, .check_lparam = strbuf4W,
+        },
+        {
+            "WM_ASKCBFORMATNAME3", WM_ASKCBFORMATNAME, .wparam = 8, .msg_result = 9,
+            .lparam_size = sizeof(strbufW), .change_lparam = strbufW, .check_lparam = strbuf4W,
+        },
+        {
+            "CB_GETLBTEXT", CB_GETLBTEXT, .msg_result = 7, .check_result = 4, .todo_result = TRUE,
+            .lparam_size = sizeof(strbufW), .change_lparam = strbufW, .check_lparam = strbuf4W,
+        },
+        {
+            "CB_GETLBTEXT2", CB_GETLBTEXT, .msg_result = 9, .check_result = 8, .todo_result = TRUE,
+            .lparam_size = sizeof(strbufW), .change_lparam = strbuf3W, .check_lparam = strbuf3W,
+        },
+        {
+            "CB_GETLBTEXT3", CB_GETLBTEXT,
+            .lparam_size = sizeof(strbufW), .change_lparam = strbuf3W, .check_lparam = strbuf3W,
+        },
+        {
+            "LB_GETTEXT", LB_GETTEXT, .msg_result = 7, .check_result = 4, .todo_result = TRUE,
+            .lparam_size = sizeof(strbufW), .change_lparam = strbufW, .check_lparam = strbuf4W,
+        },
+        {
+            "LB_GETTEXT2", LB_GETTEXT, .msg_result = 9, .check_result = 8, .todo_result = TRUE,
+            .lparam_size = sizeof(strbufW), .change_lparam = strbuf3W, .check_lparam = strbuf3W,
+        },
+        {
+            "LB_GETTEXT3", LB_GETTEXT,
+            .lparam_size = sizeof(strbufW), .change_lparam = strbuf3W, .check_lparam = strbuf3W,
+        },
+        {
+            "WM_MDIGETACTIVE", WM_MDIGETACTIVE, .no_wparam_check = TRUE,
+            .lparam_size = sizeof(BOOL), .change_lparam = &false_lparam,
+        },
+        {
+            "WM_GETMINMAXINFO", WM_GETMINMAXINFO,
+            .lparam_size = sizeof(minmax_in), .lparam = &minmax_in, .change_lparam = &minmax_out,
+            .check_size = sizeof(minmax_in)
+        },
+        {
+            "WM_MEASUREITEM", WM_MEASUREITEM, .wparam = 10,
+            .lparam_size = sizeof(mis_in), .lparam = &mis_in, .change_lparam = &mis_out,
+            .check_size = sizeof(mis_in),
+        },
+        {
+            "WM_DELETEITEM", WM_DELETEITEM, .wparam = 10,
+            .lparam_size = sizeof(dis_in), .lparam = &dis_in, .poison_lparam = TRUE,
+            .check_size = sizeof(dis_in),
+        },
+        {
+            "WM_COMPAREITEM", WM_COMPAREITEM, .wparam = 10,
+            .lparam_size = sizeof(cis_in), .lparam = &cis_in, .poison_lparam = TRUE,
+            .check_size = sizeof(cis_in),
+        },
+        {
+            "WM_WINDOWPOSCHANGING", WM_WINDOWPOSCHANGING,
+            .lparam_size = sizeof(WINDOWPOS), .lparam = &winpos_in, .change_lparam = &winpos_out,
+            .check_size = sizeof(WINDOWPOS)
+        },
+        {
+            "WM_WINDOWPOSCHANGED", WM_WINDOWPOSCHANGED,
+            .lparam_size = sizeof(WINDOWPOS), .lparam = &winpos_in, .poison_lparam = TRUE,
+            .check_size = sizeof(WINDOWPOS),
+        },
+        {
+            "WM_COPYDATA", WM_COPYDATA, .wparam = 0xdeadbeef,
+            .lparam_size = sizeof(cds_in), .lparam = &cds_in, .poison_lparam = TRUE,
+            .check_size = sizeof(cds_in),
+        },
+        {
+            "WM_COPYDATA-2", WM_COPYDATA, .wparam = 0xdeadbeef,
+            .lparam_size = sizeof(cds2_in), .lparam = &cds2_in, .poison_lparam = TRUE,
+            .check_size = sizeof(cds2_in),
+        },
+        {
+            "WM_COPYDATA-3", WM_COPYDATA, .wparam = 0xdeadbeef,
+            .lparam_size = sizeof(cds3_in), .lparam = &cds3_in, .poison_lparam = TRUE,
+            .check_size = sizeof(cds3_in),
+        },
+        {
+            "WM_COPYDATA-4", WM_COPYDATA, .wparam = 0xdeadbeef,
+            .lparam_size = sizeof(cds4_in), .lparam = &cds4_in, .poison_lparam = TRUE,
+            .check_size = sizeof(cds4_in),
+        },
+        {
+            "WM_COPYDATA-5", WM_COPYDATA, .wparam = 0xdeadbeef,
+            .lparam_size = sizeof(cds5_in), .lparam = &cds5_in, .poison_lparam = TRUE,
+            .check_size = sizeof(cds5_in),
+        },
+        {
+            "WM_STYLECHANGING", WM_STYLECHANGING,
+            .lparam_size = sizeof(style_in), .lparam = &style_in, .change_lparam = &style_out,
+            .check_size = sizeof(style_in)
+        },
+        {
+            "WM_STYLECHANGED", WM_STYLECHANGED,
+            .lparam_size = sizeof(style_in), .lparam = &style_in, .poison_lparam = TRUE,
+            .check_size = sizeof(style_in),
+        },
+        {
+            "WM_GETDLGCODE", WM_GETDLGCODE,
+            .lparam_size = sizeof(msg_in), .lparam = &msg_in, .poison_lparam = TRUE,
+            .check_size = sizeof(msg_in),
+        },
+        {
+            "SBM_SETSCROLLINFO", SBM_SETSCROLLINFO,
+            .lparam_size = sizeof(si_in), .lparam = &si_in, .change_lparam = &si_out,
+            .check_size = sizeof(si_in),
+        },
+        {
+            "SBM_GETSCROLLINFO", SBM_GETSCROLLINFO,
+            .lparam_size = sizeof(si_in), .lparam = &si_in, .change_lparam = &si_out,
+            .check_size = sizeof(si_in),
+        },
+        {
+            "SBM_GETSCROLLBARINFO", SBM_GETSCROLLBARINFO,
+            .lparam_size = sizeof(sbi_in), .lparam = &sbi_in, .change_lparam = &sbi_out,
+            .check_size = sizeof(sbi_in),
+        },
+        {
+            "EM_GETSEL", EM_GETSEL, .no_wparam_check = TRUE,
+            .lparam_size = sizeof(DWORD), .lparam = &dw_in, .change_lparam = &dw_out,
+            .check_size = sizeof(DWORD),
+        },
+        {
+            "SBM_GETRANGE", SBM_GETRANGE, .no_wparam_check = TRUE,
+            .lparam_size = sizeof(DWORD), .lparam = &dw_in, .change_lparam = &dw_out,
+            .check_size = sizeof(DWORD),
+        },
+        {
+            "CB_GETEDITSEL", CB_GETEDITSEL, .no_wparam_check = TRUE,
+            .lparam_size = sizeof(DWORD), .lparam = &dw_in, .change_lparam = &dw_out,
+            .check_size = sizeof(DWORD),
+        },
+        {
+            "EM_GETLINE", EM_GETLINE, .msg_result = 5,
+            .lparam = L"\x8""2345678", .lparam_size = sizeof(strbufW), .change_lparam = L"abc\0defg",
+            .check_size = sizeof(WCHAR), .check_lparam = L"abc\0""5678",
+        },
+        {
+            "EM_GETLINE-2", EM_GETLINE, .msg_result = 1,
+            .lparam = L"\x8""2345678", .lparam_size = sizeof(strbufW), .change_lparam = L"abc\0defg",
+            .check_size = sizeof(WCHAR), .check_lparam = L"abc\0""5678",
+        },
+        {
+            "EM_SETTABSTOPS", EM_SETTABSTOPS, .wparam = ARRAYSIZE(tabstops_in),
+            .lparam_size = sizeof(tabstops_in), .lparam = &tabstops_in, .poison_lparam = TRUE,
+            .check_size = sizeof(tabstops_in),
+        },
+        {
+            "LB_SETTABSTOPS", LB_SETTABSTOPS, .wparam = ARRAYSIZE(tabstops_in),
+            .lparam_size = sizeof(tabstops_in), .lparam = &tabstops_in, .poison_lparam = TRUE,
+            .check_size = sizeof(tabstops_in),
+        },
+        {
+            "LB_GETSELITEMS", LB_GETSELITEMS,
+            .wparam = ARRAYSIZE(items_out), .msg_result = ARRAYSIZE(items_out),
+            .lparam_size = sizeof(items_out), .change_lparam = items_out,
+        },
+        {
+            "WM_NEXTMENU", WM_NEXTMENU,
+            .lparam_size = sizeof(nm_in), .lparam = &nm_in, .change_lparam = &nm_out,
+            .check_size = sizeof(nm_in)
+        },
+        {
+            "WM_MDICREATE", WM_MDICREATE,
+            .lparam_size = sizeof(mcs_in), .lparam = &mcs_in, .poison_lparam = TRUE,
+            .check_size = sizeof(mcs_in),
+        },
+        {
+            "CB_GETCOMBOBOXINFO", CB_GETCOMBOBOXINFO,
+            .lparam_size = sizeof(cbi_in), .change_lparam = &cbi_out, .lparam = &cbi_in,
+            .check_lparam = &cbi_ret, .check_size = sizeof(cbi_in), .in_lparam = &cbi_check,
+        },
+        /* messages that don't change lparam */
+        { "WM_USER", WM_USER },
+        { "WM_NOTIFY", WM_NOTIFY },
+        { "WM_SETTEXT", WM_SETTEXT, .lparam = strbufW, .lparam_init_size = sizeof(strbufW) },
+        { "WM_DEVMODECHANGE", WM_DEVMODECHANGE, .lparam = strbufW, .lparam_init_size = sizeof(strbufW) },
+        { "CB_DIR", CB_DIR, .lparam = strbufW, .lparam_init_size = sizeof(strbufW) },
+        { "LB_DIR", LB_DIR, .lparam = strbufW, .lparam_init_size = sizeof(strbufW) },
+        { "LB_ADDFILE", LB_ADDFILE, .lparam = strbufW, .lparam_init_size = sizeof(strbufW) },
+        { "EM_REPLACESEL", EM_REPLACESEL, .lparam = strbufW, .lparam_init_size = sizeof(strbufW) },
+        { "WM_WININICHANGE", WM_WININICHANGE, .lparam = strbufW, .lparam_init_size = sizeof(strbufW) },
+        { "CB_ADDSTRING", CB_ADDSTRING },
+        { "CB_INSERTSTRING", CB_INSERTSTRING },
+        { "LB_ADDSTRING", LB_ADDSTRING },
+        /* messages not allowed to be sent by NtUserMessageCall */
+        {
+            "WM_DRAWITEM", WM_DRAWITEM, .wparam = 10,
+            .lparam_size = sizeof(drawitem_in), .lparam = &drawitem_in, .not_allowed = TRUE,
+        },
+    };
+
+    cls.lpfnWndProc = lparam_test_proc;
+    cls.lpszClassName = L"TestLParamClass";
+    RegisterClassW( &cls );
+
+    hwnd = CreateWindowExA( 0, "TestLParamClass", NULL, WS_POPUP, 0,0,0,0,0,0,0, NULL );
+
+    for (test = lparam_hook_tests; test < lparam_hook_tests + ARRAYSIZE(lparam_hook_tests); test++)
+    {
+        current_hook_test = test;
+        winetest_push_context("%s", test->name);
+
+        /* Simple unhooked SendMessage just passes unmodified lparam. */
+        winetest_push_context( "sendmsg" );
+        init_hook_test( test );
+        res = SendMessageW( hwnd, test->message, test->wparam, (LPARAM)lparam_buffer );
+        ok( res == test->msg_result, "NtUserMessageCall returned %Ix\n", res );
+        ok( wndproc_lparam == (LPARAM)lparam_buffer, "unexpected wndproc_lparam %Ix, expected %p\n",
+            wndproc_lparam, lparam_buffer );
+        winetest_pop_context();
+
+        /* NtUserMessageCall uses a copy of lparam even when not hooked. */
+        wndproc_lparam = 0;
+        winetest_push_context( "ntsendmsg" );
+        init_hook_test( test );
+        res = NtUserMessageCall( hwnd, test->message, test->wparam, (LPARAM)lparam_buffer, NULL,
+                                 NtUserSendMessage, FALSE );
+        test_msg_output( test, res, FALSE );
+        winetest_pop_context();
+
+        call_hook2 = SetWindowsHookExW( WH_CALLWNDPROC, callwnd_hook_proc2, NULL, GetCurrentThreadId() );
+        ok( call_hook2 != NULL, "SetWindowsHookExW failed\n");
+        call_hook = SetWindowsHookExW( WH_CALLWNDPROC, callwnd_hook_proc, NULL, GetCurrentThreadId() );
+        ok( call_hook != NULL, "SetWindowsHookExW failed\n");
+        ret_hook2 = SetWindowsHookExW( WH_CALLWNDPROCRET, retwnd_hook_proc2,
+                                       NULL, GetCurrentThreadId() );
+        ok( ret_hook2 != NULL, "SetWindowsHookExW failed\n");
+        ret_hook = SetWindowsHookExW( WH_CALLWNDPROCRET, retwnd_hook_proc,
+                                      NULL, GetCurrentThreadId() );
+        ok( ret_hook != NULL, "SetWindowsHookExW failed\n");
+
+        /* Hooked SendMessage behaves just like NtUserMessageCall. */
+        winetest_push_context( "hooked_sendmsg" );
+        init_hook_test( test );
+        res = SendMessageW( hwnd, test->message, test->wparam, (LPARAM)lparam_buffer );
+        test_msg_output( test, res, TRUE );
+        winetest_pop_context();
+
+        winetest_push_context( "hooked_ntsendmsg" );
+        init_hook_test( test );
+        res = NtUserMessageCall( hwnd, test->message, test->wparam, (LPARAM)lparam_buffer,
+                                 NULL, NtUserSendMessage, FALSE );
+        test_msg_output( test, res, TRUE );
+        winetest_pop_context();
+
+        ret = NtUserUnhookWindowsHookEx( call_hook );
+        ok( ret, "NtUserUnhookWindowsHook failed: %lu\n", GetLastError() );
+        ret = NtUserUnhookWindowsHookEx( call_hook2 );
+        ok( ret, "NtUserUnhookWindowsHook failed: %lu\n", GetLastError() );
+        ret = NtUserUnhookWindowsHookEx( ret_hook );
+        ok( ret, "NtUserUnhookWindowsHook failed: %lu\n", GetLastError() );
+        ret = NtUserUnhookWindowsHookEx( ret_hook2 );
+        ok( ret, "NtUserUnhookWindowsHook failed: %lu\n", GetLastError() );
+
+        winetest_pop_context();
+    }
+
+    DestroyWindow( hwnd );
+    UnregisterClassW( L"TestLParamClass", NULL );
 }
 
 START_TEST(win32u)
@@ -848,6 +1526,7 @@ START_TEST(win32u)
     test_message_filter();
     test_timer();
     test_inter_process_messages( argv[0] );
+    test_wndproc_hook();
 
     test_NtUserCloseWindowStation();
     test_NtUserDisplayConfigGetDeviceInfo();

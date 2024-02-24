@@ -1712,3 +1712,6 @@
 # Filesystem
 @ stdcall -syscall wine_nt_to_unix_file_name(ptr ptr ptr long)
 @ stdcall -syscall wine_unix_to_nt_file_name(str ptr ptr)
+
+# CW HACK 14391
+@ stdcall -syscall __wine_rpc_NtReadFile(long long ptr ptr ptr ptr long ptr ptr)

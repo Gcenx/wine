@@ -73,6 +73,7 @@
 # ifndef _POSIX_SPAWN_DISABLE_ASLR
 #  define _POSIX_SPAWN_DISABLE_ASLR 0x0100
 # endif
+# include <sys/utsname.h>
 #endif
 #ifdef __ANDROID__
 # include <jni.h>
@@ -89,6 +90,7 @@
 #include "winioctl.h"
 #include "winternl.h"
 #include "unix_private.h"
+#include "esync.h"
 #include "wine/list.h"
 #include "wine/debug.h"
 
@@ -118,6 +120,8 @@ SYSTEM_DLL_INIT_BLOCK *pLdrSystemDllInitBlock = NULL;
 
 static void *p__wine_syscall_dispatcher;
 static void **p__wine_unix_call_dispatcher;
+
+extern typeof(NtReadFile) __wine_rpc_NtReadFile;
 
 static void * const syscalls[] =
 {
@@ -356,6 +360,7 @@ static void * const syscalls[] =
     NtWriteVirtualMemory,
     NtYieldExecution,
     __wine_dbg_write,
+    __wine_rpc_NtReadFile,
     __wine_unix_spawnvp,
     wine_nt_to_unix_file_name,
     wine_server_call,
@@ -658,8 +663,124 @@ static void init_paths( char *argv[] )
     set_config_dir();
 }
 
+/* whether to use wow64 for i386 EXEs or launch a 32-bit wine */
+BOOL needs_wow64(void)
+{
+#if defined(__APPLE__) && defined(__x86_64__)
+    static int result = -1;
+    struct utsname name;
+    unsigned major, minor;
 
-static void preloader_exec( char **argv )
+    if (result == -1)
+    {
+        result = (uname(&name) == 0 &&
+                  sscanf(name.release, "%u.%u", &major, &minor) == 2 &&
+                  major >= 19 /* macOS 10.15 Catalina */);
+    }
+    return (result == 1) ? TRUE : FALSE;
+#else
+    return FALSE;
+#endif
+}
+
+/* CW HACK 22144 */
+#ifdef __APPLE__
+/* This is the same "exe path to display name" algorithm used in
+ * loader/main.c to determine the name used for the application menu (CW hack 13438).
+ *
+ * TODO: this could do something more complicated, like getting strings out of the
+ * version resource.
+ */
+static char *extract_exe_name(const char *exe_path)
+{
+    char *exe_name, *exe_path_copy, *p, *ret;
+    size_t exe_name_len;
+
+    exe_path_copy = strdup(exe_path);
+    exe_name = exe_path_copy;
+
+    if ((p = strrchr(exe_name, '\\'))) exe_name = p + 1;
+    if ((p = strrchr(exe_name, '/'))) exe_name = p + 1;
+    if (strspn(exe_name, "0123456789abcdefABCDEF") == 32 &&
+        exe_name[32] == '.')
+        exe_name += 33;
+    if ((p = strrchr(exe_name, '.')) && p != exe_name)
+        exe_name_len = p - exe_name;
+    else
+        exe_name_len = strlen(exe_name);
+
+    if (exe_name_len)
+        ret = strdup(exe_name);
+    else
+        ret = NULL;
+
+    free(exe_path_copy);
+    return ret;
+}
+
+/* Returns a path to $TMPDIR/winetemp-<wineloader_inode>-<wineloader_size_in_bytes>-<wineloader_mtime_sec>-<-wineloader_mtime_nsec>
+ * The intention is that all links to the same wineloader will go in the same directory, and a different directory
+ * will be used if wineloader is updated or modified.
+ */
+static char *create_tempdir(const char *wineloader_path)
+{
+    char *str, *tempdir = malloc(MAX_PATH);
+    struct stat st;
+    size_t n;
+
+    if (!confstr(_CS_DARWIN_USER_TEMP_DIR, tempdir, MAX_PATH))
+        goto fail;
+
+    if (stat(wineloader_path, &st))
+        goto fail;
+
+    if (!asprintf(&str, "/winetemp-%llu-%llu-%lu-%lu/", st.st_ino, st.st_size, st.st_mtimespec.tv_sec, st.st_mtimespec.tv_nsec))
+        goto fail;
+
+    n = strlcat(tempdir, str, MAX_PATH);
+    free(str);
+    if (n >= MAX_PATH)
+        goto fail;
+
+    /* mkdir may fail if the directory already exists but that's ok */
+    mkdir(tempdir, 0700);
+    return tempdir;
+
+fail:
+    free(tempdir);
+    return NULL;
+}
+
+
+static char *create_preloader_link(const char *wineloader_path, const char *exe_name)
+{
+    struct stat st;
+    char *linkpath = create_tempdir(wineloader_path);
+
+    if (!linkpath)
+        return NULL;
+
+    if (strlcat(linkpath, exe_name, MAX_PATH) >= MAX_PATH)
+        goto fail;
+
+    /* If the link already exists, use it (if it's in this dir, it points to the right place). */
+    if (!stat(linkpath, &st))
+        return linkpath;
+
+    /* Try a hard link first, to avoid the little "alias" arrow that the Dock puts on the icon.
+     * But if that fails, fall back to a symlink.
+     */
+    if (!link(wineloader_path, linkpath) || !symlink(wineloader_path, linkpath))
+        return linkpath;
+
+fail:
+    free(linkpath);
+    return NULL;
+}
+#endif
+
+
+static void preloader_exec( char **argv, const char *image_path )
 {
     if (use_preloader)
     {
@@ -677,6 +798,26 @@ static void preloader_exec( char **argv )
 #ifdef __APPLE__
         {
             posix_spawnattr_t attr;
+
+            /* CW HACK 22144: Create and exec a more descriptively-named link to the preloader,
+             * which will show up as the icon name in the Dock. */
+            {
+                char *app_name = extract_exe_name(image_path);
+                if (app_name)
+                {
+                    char *preloader_path = create_preloader_link(argv[0], app_name);
+                    if (preloader_path)
+                    {
+                        free(argv[0]);
+                        argv[0] = preloader_path;
+                    }
+
+                    /* Pass the app name to the preloader through an env var. */
+                    setenv("WINEPRELOADERAPPNAME", app_name, 1);
+                    free(app_name);
+                }
+            }
+
             posix_spawnattr_init( &attr );
             posix_spawnattr_setflags( &attr, POSIX_SPAWN_SETEXEC | _POSIX_SPAWN_DISABLE_ASLR );
             posix_spawn( NULL, argv[0], NULL, &attr, argv, *_NSGetEnviron() );
@@ -690,7 +831,7 @@ static void preloader_exec( char **argv )
 }
 
 /* exec the appropriate wine loader for the specified machine */
-static NTSTATUS loader_exec( char **argv, WORD machine )
+static NTSTATUS loader_exec( char **argv, WORD machine, const char *image_path )
 {
     if (machine != current_machine)
     {
@@ -703,14 +844,14 @@ static NTSTATUS loader_exec( char **argv, WORD machine )
                 argv[1] = malloc( len + 3 );
                 strcpy( argv[1], wineloader );
                 strcat( argv[1], "64" );
-                preloader_exec( argv );
+                preloader_exec( argv, image_path );
             }
         }
-        else if ((argv[1] = remove_tail( wineloader, "64" ))) preloader_exec( argv );
+        else if ((argv[1] = remove_tail( wineloader, "64" ))) preloader_exec( argv, image_path );
     }
 
     argv[1] = strdup( wineloader );
-    preloader_exec( argv );
+    preloader_exec( argv, image_path );
     return STATUS_INVALID_IMAGE_FORMAT;
 }
 
@@ -720,7 +861,7 @@ static NTSTATUS loader_exec( char **argv, WORD machine )
  *
  * argv[0] and argv[1] must be reserved for the preloader and loader respectively.
  */
-NTSTATUS exec_wineloader( char **argv, int socketfd, const pe_image_info_t *pe_info )
+NTSTATUS exec_wineloader( char **argv, int socketfd, const pe_image_info_t *pe_info, const char *image_path )
 {
     WORD machine = pe_info->machine;
     ULONGLONG res_start = pe_info->base;
@@ -739,7 +880,7 @@ NTSTATUS exec_wineloader( char **argv, int socketfd, const pe_image_info_t *pe_i
     putenv( preloader_reserve );
     putenv( socket_env );
 
-    return loader_exec( argv, machine );
+    return loader_exec( argv, machine, image_path );
 }
 
 
@@ -1540,6 +1681,14 @@ static NTSTATUS find_builtin_dll( UNICODE_STRING *nt_name, void **module, SIZE_T
     NTSTATUS status = STATUS_DLL_NOT_FOUND;
     BOOL found_image = FALSE;
 
+    /* CX HACK 20810: in wow64/32-bit-bottle mode, use 32-bit builtin EXEs */
+    if (wow64_using_32bit_prefix &&
+        len > 4 &&
+        (nt_name->Buffer[len-3] == 'e' &&
+         nt_name->Buffer[len-2] == 'x' &&
+         nt_name->Buffer[len-1] == 'e'))
+        pe_dir = get_pe_dir( IMAGE_FILE_MACHINE_I386 );
+
     for (i = namepos = 0; i < len; i++)
         if (nt_name->Buffer[i] == '/' || nt_name->Buffer[i] == '\\') namepos = i + 1;
     len -= namepos;
@@ -1689,7 +1838,7 @@ static const WCHAR *get_machine_wow64_dir( WORD machine )
     static const WCHAR sysx8664[] = {'\\','?','?','\\','C',':','\\','w','i','n','d','o','w','s','\\','s','y','s','x','8','6','6','4','\\',0};
     static const WCHAR sysarm64[] = {'\\','?','?','\\','C',':','\\','w','i','n','d','o','w','s','\\','s','y','s','a','r','m','6','4','\\',0};
 
-    if (machine == native_machine) machine = IMAGE_FILE_MACHINE_TARGET_HOST;
+    if (machine == native_machine || wow64_using_32bit_prefix) machine = IMAGE_FILE_MACHINE_TARGET_HOST;
 
     switch (machine)
     {
@@ -1763,7 +1912,7 @@ static NTSTATUS open_main_image( WCHAR *image, void **module, SECTION_IMAGE_INFO
         if (!status)
         {
             NtQuerySection( mapping, SectionImageInformation, info, sizeof(*info), NULL );
-            if (info->u.s.ComPlusNativeReady) info->Machine = native_machine;
+            if (info->u.s.ComPlusNativeReady && !wow64_using_32bit_prefix) info->Machine = native_machine;
         }
         NtClose( mapping );
     }
@@ -2050,6 +2199,16 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
     system_time_precise,
 };
 
+BOOL simulate_writecopy;
+
+static void hacks_init(void)
+{
+    const char *env_str;
+
+    env_str = getenv("WINE_SIMULATE_WRITECOPY");
+    if (env_str) simulate_writecopy = atoi(env_str);
+    else simulate_writecopy = main_argc > 1 && strstr(main_argv[1], "UplayWebCore.exe");
+}
 
 #ifdef _WIN64
 
@@ -2068,6 +2227,49 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
 
 #endif  /* _WIN64 */
 
+#if defined(__APPLE__) && defined(__x86_64__)
+static __thread struct tm localtime_tls;
+struct tm *my_localtime(const time_t *timep)
+{
+    return localtime_r(timep, &localtime_tls);
+}
+
+static void hook(void *to_hook, const void *replace)
+{
+    size_t offset;
+    int ret;
+
+    struct hooked_function
+    {
+        char jmp[8];
+        const void *dst;
+    } *hooked_function = to_hook;
+    ULONG_PTR intval = (UINT_PTR)to_hook;
+
+    intval -= (intval % 4096);
+    ret = mprotect((void *)intval, 0x2000, PROT_EXEC | PROT_READ | PROT_WRITE);
+
+    /* The offset is from the end of the jmp instruction (6 bytes) to the start of the destination. */
+    offset = offsetof(struct hooked_function, dst) - offsetof(struct hooked_function, jmp) - 0x6;
+
+    /* jmp *(rip + offset) */
+    hooked_function->jmp[0] = 0xff;
+    hooked_function->jmp[1] = 0x25;
+    hooked_function->jmp[2] = offset;
+    hooked_function->jmp[3] = 0x00;
+    hooked_function->jmp[4] = 0x00;
+    hooked_function->jmp[5] = 0x00;
+    /* Filler */
+    hooked_function->jmp[6] = 0xcc;
+    hooked_function->jmp[7] = 0xcc;
+    /* Dest address absolute */
+    hooked_function->dst = replace;
+
+    //size = sizeof(*hooked_function);
+    //NtProtectVirtualMemory(proc, (void **)hooked_function, &size, old_protect, &old_protect);
+}
+#endif
+
 /***********************************************************************
  *           start_main_thread
  */
@@ -2080,6 +2282,8 @@ static void start_main_thread(void)
     signal_alloc_thread( teb );
     dbg_init();
     startup_info_size = server_init_process();
+    hacks_init();
+    esync_init();
     virtual_map_user_shared_data();
     init_cpu_info();
     init_files();
@@ -2097,6 +2301,13 @@ static void start_main_thread(void)
     load_apiset_dll();
     ntdll_init_syscalls( 0, &syscall_table, p__wine_syscall_dispatcher );
     *p__wine_unix_call_dispatcher = __wine_unix_call_dispatcher;
+
+#if defined(__APPLE__) && defined(__x86_64__)
+    /* This is necessary because we poke PEB into pthread TLS at offset 0x60. It is normally in use by
+     * localtime(), which is called a lot by system libraries. Make localtime() go away. */
+    hook(localtime, my_localtime);
+#endif
+
     server_init_process_done();
 }
 
@@ -2410,7 +2621,7 @@ void __wine_main( int argc, char *argv[], char *envp[] )
 
             memcpy( new_argv + 1, argv, (argc + 1) * sizeof(*argv) );
             putenv( noexec );
-            loader_exec( new_argv, current_machine );
+            loader_exec( new_argv, current_machine, argv[0] );
             fatal_error( "could not exec the wine loader\n" );
         }
     }

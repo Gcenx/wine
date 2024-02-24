@@ -146,10 +146,8 @@ struct win_proc_params
     UINT msg;
     WPARAM wparam;
     LPARAM lparam;
-    LRESULT *result;
     BOOL ansi;
     BOOL ansi_dst;
-    BOOL needs_unpack;
     enum wm_char_mapping mapping;
     DPI_AWARENESS_CONTEXT dpi_awareness;
     WNDPROC procA;
@@ -167,9 +165,9 @@ struct win_hook_params
     int code;
     WPARAM wparam;
     LPARAM lparam;
-    UINT lparam_size;
     BOOL prev_unicode;
     BOOL next_unicode;
+    WCHAR module[1];
 };
 
 /* NtUserCopyImage params */
@@ -188,7 +186,6 @@ struct draw_text_params
     HDC hdc;
     int count;
     RECT rect;
-    RECT *ret_rect; /* FIXME: Use NtCallbackReturn instead */
     UINT flags;
     WCHAR str[1];
 };
@@ -304,7 +301,6 @@ enum
     NtUserSpyGetMsgName       = 0x3003,
     NtUserSpyEnter            = 0x0304,
     NtUserSpyExit             = 0x0305,
-    NtUserWinProcResult       = 0x0306,
 };
 
 /* NtUserThunkedMenuItemInfo codes */
@@ -640,6 +636,17 @@ struct packed_MDICREATESTRUCTW
     INT       cy;
     DWORD     style;
     ULONGLONG lParam;
+};
+
+struct packed_COMBOBOXINFO
+{
+    DWORD cbSize;
+    RECT rcItem;
+    RECT rcButton;
+    DWORD stateButton;
+    ULONGLONG hwndCombo;
+    ULONGLONG hwndItem;
+    ULONGLONG hwndList;
 };
 
 
@@ -1503,5 +1510,13 @@ static inline BOOL NtUserShowOwnedPopups( HWND hwnd, BOOL show )
 {
     return NtUserCallHwndParam( hwnd, show, NtUserCallHwndParam_ShowOwnedPopups );
 }
+
+/* Wine extensions */
+/* CW Hack 22310 */
+extern NTSTATUS WINAPI __wine_get_current_process_explicit_app_user_model_id( WCHAR *buffer, INT size );
+extern NTSTATUS WINAPI __wine_set_current_process_explicit_app_user_model_id( const WCHAR *aumid );
+
+/* Wine extensions */
+BOOL WINAPI __wine_send_input( HWND hwnd, const INPUT *input, const RAWINPUT *rawinput );
 
 #endif /* _NTUSER_ */

@@ -1913,7 +1913,7 @@ static HRESULT WINAPI async_reader_create(IWMReader **reader)
     object->IWMReaderTypeNegotiation_iface.lpVtbl = &WMReaderTypeNegotiationVtbl;
     object->refcount = 1;
 
-    if (FAILED(hr = winegstreamer_create_wm_sync_reader((IUnknown *)&object->IWMReader_iface,
+    if (FAILED(hr = create_sync_reader((IUnknown *)&object->IWMReader_iface,
             (void **)&object->reader_inner)))
         goto failed;
 

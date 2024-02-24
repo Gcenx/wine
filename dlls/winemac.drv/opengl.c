@@ -1452,7 +1452,7 @@ static BOOL create_context(struct wgl_context *context, CGLContextObj share, uns
         attribs[n++] = pf->samples;
     }
 
-    if (pf->backing_store)
+    if (force_backing_store || pf->backing_store) /* CrossOver Hack 14364 */
         attribs[n++] = kCGLPFABackingStore;
 
     if (core)

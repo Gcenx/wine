@@ -3813,6 +3813,30 @@ SOCKET WINAPI WSASocketA(int af, int type, int protocol,
     return WSASocketW(af, type, protocol, &info, g, dwFlags);
 }
 
+#ifdef _WIN64
+static BOOL WINAPI check_is_eabackgroundservice( INIT_ONCE *once, void *param, void **ctx )
+{
+    BOOL *is_eabs = param;
+    WCHAR name[MAX_PATH], *module_exe;
+    if (GetModuleFileNameW(NULL, name, ARRAYSIZE(name)))
+    {
+        module_exe = wcsrchr(name, '\\');
+        module_exe = module_exe ? module_exe + 1 : name;
+        *is_eabs = !wcsicmp(module_exe, L"EABackgroundService.exe");
+    }
+
+    return TRUE;
+}
+
+static BOOL is_eabackgroundservice(void)
+{
+    static BOOL is_eabs = FALSE;
+    static INIT_ONCE once = INIT_ONCE_STATIC_INIT;
+    InitOnceExecuteOnce( &once, check_is_eabackgroundservice, &is_eabs, NULL );
+    return is_eabs;
+}
+#endif
+
 /***********************************************************************
  *      WSASocketW          (WS2_32.79)
  *
@@ -3940,6 +3964,17 @@ SOCKET WINAPI WSASocketW(int af, int type, int protocol,
         CloseHandle(handle);
         return INVALID_SOCKET;
     }
+
+#ifdef _WIN64
+    if (is_eabackgroundservice())
+    {
+        DWORD value = 0x400000;
+        FIXME( "CXHACK 22475: changing SO_SNDBUF\n" );
+        err = setsockopt( ret, SOL_SOCKET, SO_SNDBUF, (char *)&value, sizeof(value) );
+        if (err) ERR( "setsockopt failed: %u\n", WSAGetLastError() );
+    }
+#endif
+
     WSASetLastError(0);
     return ret;
 }
