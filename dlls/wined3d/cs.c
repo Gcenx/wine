@@ -22,6 +22,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(d3d);
 WINE_DECLARE_DEBUG_CHANNEL(d3d_perf);
 WINE_DECLARE_DEBUG_CHANNEL(d3d_sync);
 WINE_DECLARE_DEBUG_CHANNEL(fps);
+WINE_DECLARE_DEBUG_CHANNEL(winediag);
 
 #define WINED3D_INITIAL_CS_SIZE 4096
 
@@ -3410,7 +3411,10 @@ struct wined3d_cs *wined3d_cs_create(struct wined3d_device *device,
 
     cs->c.ops = &wined3d_cs_st_ops;
     cs->c.device = device;
-    cs->serialize_commands = TRACE_ON(d3d_sync) || wined3d_settings.cs_multithreaded & WINED3D_CSMT_SERIALIZE;
+    cs->serialize_commands = TRACE_ON(d3d_sync) || wined3d_settings.cs_multithreaded & WINED3D_CSMT_SERIALIZE
+        || !d3d_info->multithread_safe;
+    if (cs->serialize_commands)
+        ERR_(winediag)("Enabling CS commands serialization.\n");
 
     if (cs->serialize_commands)
         ERR_(d3d_sync)("Forcing serialization of all command streams.\n");

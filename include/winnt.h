@@ -21,6 +21,8 @@
 #ifndef _WINNT_
 #define _WINNT_
 
+#include "wine/winheader_enter.h"
+
 #include <basetsd.h>
 #include <guiddef.h>
 #include <winapifamily.h>
@@ -2138,7 +2140,7 @@ typedef struct _NT_TIB
 
 struct _TEB;
 
-#if defined(__i386__) && defined(__GNUC__) && ((__GNUC__ > 3) || ((__GNUC__ == 3) && (__GNUC_MINOR__ >= 2)))
+#if (defined(__i386__) || defined(__i386_on_x86_64__))  && defined(__GNUC__) && ((__GNUC__ > 3) || ((__GNUC__ == 3) && (__GNUC_MINOR__ >= 2)))
 static FORCEINLINE struct _TEB * WINAPI NtCurrentTeb(void)
 {
     struct _TEB *teb;
@@ -6441,7 +6443,7 @@ static FORCEINLINE LONGLONG WINAPI InterlockedExchangeAdd64( LONGLONG volatile *
     return __sync_fetch_and_add( dest, incr );
 }
 
-static FORCEINLINE LONG WINAPI InterlockedIncrement( LONG volatile *dest )
+static FORCEINLINE LONG WINAPI InterlockedIncrement( LONG volatile * HOSTPTR dest )
 {
     return __sync_add_and_fetch( dest, 1 );
 }
@@ -6451,7 +6453,7 @@ static FORCEINLINE short WINAPI InterlockedIncrement16( short volatile *dest )
     return __sync_add_and_fetch( dest, 1 );
 }
 
-static FORCEINLINE LONG WINAPI InterlockedDecrement( LONG volatile *dest )
+static FORCEINLINE LONG WINAPI InterlockedDecrement( LONG volatile * HOSTPTR dest )
 {
     return __sync_add_and_fetch( dest, -1 );
 }
@@ -6466,6 +6468,8 @@ static FORCEINLINE void * WINAPI InterlockedExchangePointer( void *volatile *des
     void *ret;
 #if (__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 7))
     ret = __atomic_exchange_n( dest, val, __ATOMIC_SEQ_CST );
+#elif defined(__i386_on_x86_64__)
+    __asm__ __volatile__( "lock; xchgl %0,(%1)" : "=r" (ret) :"r" (dest), "0" (val) : "memory" );
 #elif defined(__x86_64__)
     __asm__ __volatile__( "lock; xchgq %0,(%1)" : "=r" (ret) :"r" (dest), "0" (val) : "memory" );
 #elif defined(__i386__)
@@ -6545,5 +6549,7 @@ static FORCEINLINE void YieldProcessor(void)
 #ifdef __cplusplus
 }
 #endif
+
+#include "wine/winheader_exit.h"
 
 #endif  /* _WINNT_ */

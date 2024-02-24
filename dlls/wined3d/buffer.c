@@ -217,9 +217,16 @@ static BOOL wined3d_buffer_gl_create_buffer_object(struct wined3d_buffer_gl *buf
     binding = wined3d_buffer_gl_binding_from_bind_flags(gl_info, buffer_gl->b.resource.bind_flags);
     if (buffer_gl->b.resource.usage & WINED3DUSAGE_DYNAMIC)
     {
+        TRACE("Buffer has WINED3DUSAGE_DYNAMIC set.\n");
         usage = GL_STREAM_DRAW_ARB;
         coherent = false;
     }
+
+    if (cxgames_hacks.allow_glmapbuffer == WINED3D_MAPBUF_NEVER)
+    {
+        buffer_gl->b.resource.pin_sysmem = 1;
+    }
+
     gl_storage_flags = wined3d_resource_gl_storage_flags(&buffer_gl->b.resource);
     if (!wined3d_device_gl_create_bo(device_gl, context_gl, size, binding, usage, coherent, gl_storage_flags, bo))
     {
@@ -1008,11 +1015,13 @@ static HRESULT buffer_resource_sub_resource_map(struct wined3d_resource *resourc
             addr.buffer_object = buffer->buffer_object;
             addr.addr = 0;
             buffer->map_ptr = wined3d_context_map_bo_address(context, &addr, resource->size, flags);
+
             /* We are accessing buffer->resource.client from the CS thread,
              * but it's safe because the client thread will wait for the
              * map to return, thus completely serializing this call with
              * other client code. */
-            buffer->resource.client.addr = addr;
+            if (context->d3d_info->persistent_map)
+                buffer->resource.client.addr = addr;
 
             if (((DWORD_PTR)buffer->map_ptr) & (RESOURCE_ALIGNMENT - 1))
             {
@@ -1478,13 +1487,22 @@ static BOOL wined3d_buffer_vk_create_buffer_object(struct wined3d_buffer_vk *buf
         struct wined3d_context_vk *context_vk)
 {
     struct wined3d_resource *resource = &buffer_vk->b.resource;
+    const struct wined3d_vk_info *vk_info = &wined3d_adapter_vk(resource->device->adapter)->vk_info;
     struct wined3d_bo_vk *bo_vk;
+    VkBufferUsageFlags usage;
 
     if (!(bo_vk = heap_alloc(sizeof(*bo_vk))))
         return FALSE;
 
+    usage = vk_buffer_usage_from_bind_flags(resource->bind_flags);
+    if (usage & VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT
+            && !vk_info->supported[WINED3D_VK_EXT_TRANSFORM_FEEDBACK])
+    {
+        WARN("Dropping unsupported VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT.\n");
+        usage &= ~VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT;
+    }
     if (!(wined3d_context_vk_create_bo(context_vk, resource->size,
-            vk_buffer_usage_from_bind_flags(resource->bind_flags),
+            usage,
             vk_memory_type_from_access_flags(resource->access, resource->usage), bo_vk)))
     {
         WARN("Failed to create Vulkan buffer.\n");
@@ -1578,7 +1596,10 @@ HRESULT wined3d_buffer_vk_init(struct wined3d_buffer_vk *buffer_vk, struct wined
             && !vk_info->supported[WINED3D_VK_EXT_TRANSFORM_FEEDBACK])
     {
         WARN("The Vulkan implementation does not support transform feedback.\n");
-        return WINED3DERR_INVALIDCALL;
+        if (cxgames_hacks.force_transform_feedback)
+            WARN("HACK, allowing buffer creation.\n");
+        else
+            return WINED3DERR_INVALIDCALL;
     }
 
     if (desc->access & WINED3D_RESOURCE_ACCESS_GPU)

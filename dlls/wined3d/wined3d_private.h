@@ -83,6 +83,12 @@ static inline size_t align(size_t addr, size_t alignment)
 #define WINED3D_QUIRK_BROKEN_ARB_FOG            0x00000200
 #define WINED3D_QUIRK_NO_INDEPENDENT_BIT_DEPTHS 0x00000400
 
+#define WINED3D_CX_QUIRK_GLSL_CLIP_BROKEN       0x00020000
+#define WINED3D_CX_QUIRK_TEXCOORD_FOG           0x00040000
+#define WINED3D_CX_QUIRK_BROKEN_ARA             0x00080000
+#define WINED3D_CX_QUIRK_BROKEN_ROUND           0x00100000
+#define WINED3D_CX_QUIRK_BROKEN_MULTITHREAD_GL  0x00200000
+
 #define WINED3D_MAX_DIRTY_REGION_COUNT 7
 
 #define WINED3D_ALPHA_TO_COVERAGE_ENABLE MAKEFOURCC('A','2','M','1')
@@ -240,8 +246,12 @@ struct wined3d_d3d_info
     uint32_t clip_control : 1;
     uint32_t full_ffp_varyings : 1;
     uint32_t scaled_resolve : 1;
+    uint32_t emulated_clipplanes : 1;
+    uint32_t multithread_safe : 1;
     uint32_t pbo : 1;
     uint32_t subpixel_viewport : 1;
+    uint32_t fences : 1;
+    uint32_t persistent_map : 1;
     enum wined3d_feature_level feature_level;
 
     DWORD multisample_draw_location;
@@ -465,6 +475,7 @@ struct wined3d_settings
     unsigned int sample_count;
     BOOL check_float_constants;
     unsigned int strict_shader_math;
+    unsigned int multiply_special;
     unsigned int max_sm_vs;
     unsigned int max_sm_hs;
     unsigned int max_sm_ds;
@@ -477,6 +488,22 @@ struct wined3d_settings
 };
 
 extern struct wined3d_settings wined3d_settings DECLSPEC_HIDDEN;
+
+enum wined3d_map_buffer_mode
+{
+    WINED3D_MAPBUF_ALWAYS,
+    WINED3D_MAPBUF_NEVER,
+    WINED3D_MAPBUF_NEVER_NV
+};
+
+struct cxgames_hacks
+{
+    BOOL safe_vs_consts;
+    enum wined3d_map_buffer_mode allow_glmapbuffer;
+    BOOL force_transform_feedback;
+};
+
+extern struct cxgames_hacks cxgames_hacks DECLSPEC_HIDDEN;
 
 enum wined3d_shader_byte_code_format
 {
@@ -855,6 +882,7 @@ enum WINED3D_SHADER_INSTRUCTION_HANDLER
     WINED3DSIH_ENDREP,
     WINED3DSIH_ENDSWITCH,
     WINED3DSIH_EQ,
+    WINED3DSIH_EVAL_CENTROID,
     WINED3DSIH_EVAL_SAMPLE_INDEX,
     WINED3DSIH_EXP,
     WINED3DSIH_EXPP,
@@ -1435,7 +1463,8 @@ struct ps_compile_args
     WORD                        np2_fixup;
     WORD shadow; /* WINED3D_MAX_FRAGMENT_SAMPLERS, 16 */
     WORD texcoords_initialized; /* WINED3D_MAX_TEXTURES, 8 */
-    WORD padding_to_dword;
+    /* Emulate clipping via KIL / discard. */
+    BOOL clip;
     DWORD pointsprite : 1;
     DWORD flatshading : 1;
     DWORD alpha_test_func : 3;
@@ -1462,6 +1491,7 @@ struct vs_compile_args
     BYTE padding : 1;
     WORD swizzle_map;   /* MAX_ATTRIBS, 16 */
     unsigned int next_shader_input_count;
+    DWORD emulated_clipplanes;
     DWORD interpolation_mode[WINED3D_PACKED_INTERPOLATION_SIZE];
 };
 
@@ -2415,6 +2445,7 @@ enum wined3d_retired_object_type_vk
     WINED3D_RETIRED_SAMPLER_VK,
     WINED3D_RETIRED_QUERY_POOL_VK,
     WINED3D_RETIRED_EVENT_VK,
+    WINED3D_RETIRED_PIPELINE_VK,
 };
 
 struct wined3d_retired_object_vk
@@ -2438,6 +2469,7 @@ struct wined3d_retired_object_vk
         VkImageView vk_image_view;
         VkSampler vk_sampler;
         VkEvent vk_event;
+        VkPipeline vk_pipeline;
         struct
         {
             struct wined3d_query_pool_vk *pool_vk;
@@ -2563,7 +2595,8 @@ struct wined3d_context_vk
 
     uint32_t update_compute_pipeline : 1;
     uint32_t update_stream_output : 1;
-    uint32_t padding : 30;
+    uint32_t hack_render_area_trimmed_to_viewport : 1;
+    uint32_t padding : 29;
 
     struct
     {
@@ -2666,6 +2699,8 @@ void wined3d_context_vk_destroy_vk_sampler(struct wined3d_context_vk *context_vk
         VkSampler vk_sampler, uint64_t command_buffer_id) DECLSPEC_HIDDEN;
 void wined3d_context_vk_destroy_vk_event(struct wined3d_context_vk *context_vk,
         VkEvent vk_event, uint64_t command_buffer_id) DECLSPEC_HIDDEN;
+void wined3d_context_vk_destroy_vk_pipeline(struct wined3d_context_vk *context_vk,
+        VkPipeline vk_pipeline, uint64_t command_buffer_id) DECLSPEC_HIDDEN;
 void wined3d_context_vk_end_current_render_pass(struct wined3d_context_vk *context_vk) DECLSPEC_HIDDEN;
 VkCommandBuffer wined3d_context_vk_get_command_buffer(struct wined3d_context_vk *context_vk) DECLSPEC_HIDDEN;
 struct wined3d_pipeline_layout_vk *wined3d_context_vk_get_pipeline_layout(struct wined3d_context_vk *context_vk,
@@ -2679,7 +2714,6 @@ void wined3d_context_vk_image_barrier(struct wined3d_context_vk *context_vk,
         VkImageLayout new_layout, VkImage image, const VkImageSubresourceRange *range) DECLSPEC_HIDDEN;
 HRESULT wined3d_context_vk_init(struct wined3d_context_vk *context_vk,
         struct wined3d_swapchain *swapchain) DECLSPEC_HIDDEN;
-void wined3d_context_vk_poll_command_buffers(struct wined3d_context_vk *context_vk) DECLSPEC_HIDDEN;
 void wined3d_context_vk_submit_command_buffer(struct wined3d_context_vk *context_vk,
         unsigned int wait_semaphore_count, const VkSemaphore *wait_semaphores, const VkPipelineStageFlags *wait_stages,
         unsigned int signal_semaphore_count, const VkSemaphore *signal_semaphores) DECLSPEC_HIDDEN;
@@ -3277,6 +3311,11 @@ struct wined3d_gl_info
     void (WINE_GLAPI *p_glEnableWINE)(GLenum cap);
 };
 
+static inline BOOL wined3d_fence_supported(const struct wined3d_gl_info *gl_info)
+{
+    return gl_info->supported[ARB_SYNC] || gl_info->supported[NV_FENCE] || gl_info->supported[APPLE_FENCE];
+}
+
 /* The driver names reflect the lowest GPU supported
  * by a certain driver, so DRIVER_AMD_R300 supports
  * R3xx, R4xx and R5xx GPUs. */
@@ -3504,6 +3543,7 @@ struct wined3d_adapter_vk
 
     VkPhysicalDeviceLimits device_limits;
     VkPhysicalDeviceMemoryProperties memory_properties;
+    VkPhysicalDeviceDriverProperties driver_properties;
 };
 
 static inline struct wined3d_adapter_vk *wined3d_adapter_vk(struct wined3d_adapter *adapter)
@@ -3651,6 +3691,7 @@ struct wined3d_ffp_vs_settings
     DWORD swizzle_map     : 16; /* MAX_ATTRIBS, 16 */
     DWORD padding         : 2;
 
+    DWORD emulated_clipplanes;
     DWORD texgen[WINED3D_MAX_TEXTURES];
 };
 
@@ -3704,6 +3745,8 @@ struct wined3d_depth_stencil_state
 {
     LONG refcount;
     struct wined3d_depth_stencil_state_desc desc;
+
+    bool writes_ds;
 
     void *parent;
     const struct wined3d_parent_ops *parent_ops;
@@ -6742,5 +6785,47 @@ static inline bool wined3d_map_persistent(void)
 #define WINED3D_OPENGL_WINDOW_CLASS_NAME "WineD3D_OpenGL"
 
 extern CRITICAL_SECTION wined3d_command_cs;
+
+static inline DWORD find_emulated_clipplanes(const struct wined3d_context *context,
+        const struct wined3d_state *state)
+{
+    const struct wined3d_d3d_info *d3d_info = context->d3d_info;
+
+    if (!d3d_info->emulated_clipplanes)
+        return 0;
+    if (!state->render_states[WINED3D_RS_CLIPPING])
+        return 0;
+    /* With pixelshaders, emulate all enabled clipplanes (disabled per
+     * shader if no free texcoord is found). */
+    if (use_ps(state))
+        return state->render_states[WINED3D_RS_CLIPPLANEENABLE];
+    if (context->lowest_disabled_stage >= d3d_info->limits.ffp_blend_stages)
+        return 0;
+    return state->render_states[WINED3D_RS_CLIPPLANEENABLE];
+}
+
+static inline void wined3d_set_fpu_cw(WORD cw)
+{
+#if defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))
+    __asm__ volatile ("fnclex");
+    __asm__ volatile ("fldcw %0" : : "m" (cw));
+#elif defined(__i386__) && defined(_MSC_VER)
+    __asm fnclex;
+    __asm fldcw cw;
+#endif
+}
+
+static inline WORD wined3d_get_fpu_cw(void)
+{
+    WORD cw = 0;
+#if defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))
+    __asm__ volatile ("fnstcw %0" : "=m" (cw));
+#elif defined(__i386__) && defined(_MSC_VER)
+    __asm fnstcw cw;
+#endif
+    return cw;
+}
+
+#define WINED3D_DEFAULT_FPU_CW 0x037f
 
 #endif

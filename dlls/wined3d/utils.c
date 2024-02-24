@@ -2525,8 +2525,20 @@ static void check_fbo_compat(struct wined3d_caps_gl_ctx *ctx, struct wined3d_for
             type_string = "depth / stencil";
         }
 
-        status = gl_info->fbo_ops.glCheckFramebufferStatus(GL_FRAMEBUFFER);
-        checkGLcall("Framebuffer format check");
+        /* CrossOver Hack #18775: glCheckFramebufferStatus() throws a Metal
+         * exception for GL_TEXTURE_CUBE_MAP and GL_RGB_422_APPLE on Big Sur on
+         * Apple Silicon. (Fixed on Monterey).
+         * Manually return GL_FRAMEBUFFER_UNSUPPORTED.
+         */
+        if (type == WINED3D_GL_RES_TYPE_TEX_CUBE && format->format == GL_RGB_422_APPLE)
+        {
+            status = GL_FRAMEBUFFER_UNSUPPORTED;
+        }
+        else
+        {
+            status = gl_info->fbo_ops.glCheckFramebufferStatus(GL_FRAMEBUFFER);
+            checkGLcall("Framebuffer format check");
+        }
 
         if (status == GL_FRAMEBUFFER_COMPLETE)
         {
@@ -6499,7 +6511,7 @@ void wined3d_ffp_get_fs_settings(const struct wined3d_context *context, const st
         }
     }
     settings->sRGB_write = !d3d_info->srgb_write_control && needs_srgb_write(d3d_info, state, &state->fb);
-    if (d3d_info->vs_clipping || !use_vs(state) || !state->render_states[WINED3D_RS_CLIPPING]
+    if (!d3d_info->emulated_clipplanes || !state->render_states[WINED3D_RS_CLIPPING]
             || !state->render_states[WINED3D_RS_CLIPPLANEENABLE])
     {
         /* No need to emulate clipplanes if GL supports native vertex shader clipping or if
@@ -6834,6 +6846,7 @@ void wined3d_ffp_get_vs_settings(const struct wined3d_context *context,
         settings->flatshading = FALSE;
 
     settings->swizzle_map = si->swizzle_map;
+    settings->emulated_clipplanes = find_emulated_clipplanes(context, state);
 }
 
 int wined3d_ffp_vertex_program_key_compare(const void *key, const struct wine_rb_entry *entry)

@@ -2439,6 +2439,9 @@ void wined3d_context_gl_enable_clip_distances(struct wined3d_context_gl *context
     unsigned int clip_distance_count, i;
     uint32_t disable_mask, current_mask;
 
+    if (gl_info->quirks & WINED3D_CX_QUIRK_GLSL_CLIP_BROKEN)
+        return;
+
     clip_distance_count = gl_info->limits.user_clip_distances;
     disable_mask = ~enable_mask;
     enable_mask &= wined3d_mask_from_size(clip_distance_count);
@@ -2865,9 +2868,12 @@ static void *wined3d_bo_gl_map(struct wined3d_bo_gl *bo, struct wined3d_context_
         ERR("Failed to create new buffer object.\n");
     }
 
-    if (bo->command_fence_id == device_gl->current_fence_id)
-        wined3d_context_gl_submit_command_fence(context_gl);
-    wined3d_context_gl_wait_command_fence(context_gl, bo->command_fence_id);
+    if (context_gl->c.d3d_info->fences)
+    {
+        if (bo->command_fence_id == device_gl->current_fence_id)
+            wined3d_context_gl_submit_command_fence(context_gl);
+        wined3d_context_gl_wait_command_fence(context_gl, bo->command_fence_id);
+    }
 
 map:
     if (bo->b.map_ptr)
@@ -2931,7 +2937,8 @@ static void wined3d_bo_gl_unmap(struct wined3d_bo_gl *bo, struct wined3d_context
 {
     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
 
-    if (context_gl->c.device->adapter->mapped_size <= MAX_PERSISTENT_MAPPED_BYTES)
+    if (context_gl->c.d3d_info->persistent_map
+            && context_gl->c.device->adapter->mapped_size <= MAX_PERSISTENT_MAPPED_BYTES)
     {
         TRACE("Not unmapping BO %p.\n", bo);
         return;
@@ -2954,6 +2961,7 @@ static void wined3d_bo_gl_unmap(struct wined3d_bo_gl *bo, struct wined3d_context
     if (bo->b.client_map_count)
     {
         wined3d_device_bo_map_unlock(context_gl->c.device);
+        assert(context_gl->c.d3d_info->persistent_map);
         TRACE("BO %p is still in use by a client thread; not unmapping.\n", bo);
         return;
     }
@@ -5163,7 +5171,7 @@ void draw_primitive(struct wined3d_device *device, const struct wined3d_state *s
         return;
     }
 
-    if (dsv && (!state->depth_stencil_state || state->depth_stencil_state->desc.depth_write))
+    if (dsv && (!state->depth_stencil_state || state->depth_stencil_state->writes_ds))
     {
         DWORD location = context->render_offscreen ? dsv->resource->draw_binding : WINED3D_LOCATION_DRAWABLE;
 

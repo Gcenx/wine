@@ -41,6 +41,7 @@
 #include <dlfcn.h>
 #ifdef HAVE_MACH_O_LOADER_H
 #include <mach/thread_status.h>
+#include <mach/vm_statistics.h>
 #include <mach-o/loader.h>
 #include <mach-o/ldsyms.h>
 #endif
@@ -84,6 +85,7 @@ static struct wine_preload_info preload_info[] =
     { (void *)0x000000010000, 0x00100000 },  /* DOS area */
     { (void *)0x000000110000, 0x67ef0000 },  /* low memory area */
     { (void *)0x00007ff00000, 0x000f0000 },  /* shared user data */
+    { (void *)0x000080000000, 0x7fffffff },  /* 2-4GB large-address-aware area */
     { (void *)0x000100000000, 0x14000000 },  /* WINE_4GB_RESERVE section */
     { (void *)0x7ffd00000000, 0x01ff0000 },  /* top-down allocations + virtual heap */
 #endif /* __i386__ */
@@ -301,6 +303,41 @@ MAKE_FUNCPTR(dladdr);
 extern int _dyld_func_lookup( const char *dyld_func_name, void **address );
 
 /* replacement for libc functions */
+
+#ifdef __i386__ /* CrossOver Hack #16371 */
+static inline size_t wld_strlen( const char *str )
+{
+    size_t len;
+    for (len = 0; str[len]; ++len)
+        /* nothing */;
+    return len;
+}
+
+static inline int wld_tolower( int c )
+{
+    if ('A' <= c && c <= 'Z')
+        return c - 'A' + 'a';
+    return c;
+}
+
+static inline int wld_strncasecmp( const char *str1, const char *str2, size_t len )
+{
+    if (len <= 0) return 0;
+    while ((--len > 0) && *str1 && (wld_tolower(*str1) == wld_tolower(*str2))) { str1++; str2++; }
+    return wld_tolower(*str1) - wld_tolower(*str2);
+}
+
+static inline const char * wld_strcasestr( const char *haystack, const char *needle )
+{
+    size_t len = wld_strlen(needle);
+    for ( ; *haystack ; ++haystack)
+    {
+        if (!wld_strncasecmp(haystack, needle, len))
+            return haystack;
+    }
+    return NULL;
+}
+#endif
 
 static int wld_strncmp( const char *str1, const char *str2, size_t len )
 {
@@ -557,7 +594,7 @@ static int map_region( struct wine_preload_info *info )
 
     for (;;)
     {
-        ret = wld_mmap( info->addr, info->size, PROT_NONE, flags, -1, 0 );
+        ret = wld_mmap( info->addr, info->size, PROT_NONE, flags, VM_MAKE_TAG(240), 0 );
         if (ret == info->addr) return 1;
         if (ret != (void *)-1) wld_munmap( ret, info->size );
         if (flags & MAP_FIXED) break;
@@ -613,6 +650,19 @@ void *wld_start( void *stack, int *is_unix_thread )
     LOAD_POSIX_DYLD_FUNC( dlsym );
     LOAD_POSIX_DYLD_FUNC( dladdr );
     LOAD_MACHO_DYLD_FUNC( _dyld_get_image_slide );
+
+#ifdef __i386__ /* CrossOver Hack #16371 */
+    {
+        const char *qw;
+        if (*pargc >= 3 && (qw = wld_strcasestr(argv[2], "qw")) && wld_strcasestr(qw + 2, "patch.exe"))
+        {
+            if (preload_info[3].addr == (void *)0x00110000 && preload_info[3].size == 0x67ef0000)
+                preload_info[3].size = 0x70ef0000;
+            else
+                wld_printf( "warning: detected Quicken patcher (%s) but preload_info is not as expected; not applying adjustment", argv[2] );
+        }
+    }
+#endif
 
     /* reserve memory that Wine needs */
     if (reserve) preload_reserve( reserve );

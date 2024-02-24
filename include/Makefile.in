@@ -809,6 +809,8 @@ SOURCES = \
 	wine/orpc.idl \
 	wine/svcctl.idl \
 	wine/winedxgi.idl \
+	wine/winheader_enter.h \
+	wine/winheader_exit.h \
 	winerror.h \
 	winevt.h \
 	wingdi.h \
