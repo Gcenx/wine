@@ -484,6 +484,12 @@ static const struct column col_videocontroller[] =
     { L"VideoModeDescription",        CIM_STRING|COL_FLAG_DYNAMIC },
     { L"VideoProcessor",              CIM_STRING|COL_FLAG_DYNAMIC },
 };
+static const struct column col_serverfeature[] =
+{
+    { L"ID",       CIM_UINT32|COL_FLAG_KEY },
+    { L"ParentID", CIM_UINT32 },
+    { L"Name",     CIM_STRING },
+};
 
 static const struct column col_volume[] =
 {
@@ -936,6 +942,12 @@ struct record_videocontroller
     const WCHAR *videomodedescription;
     const WCHAR *videoprocessor;
 };
+struct record_serverfeature
+{
+    UINT32       id;
+    UINT32       parentid;
+    const WCHAR *name;
+};
 
 struct record_volume
 {
@@ -1085,6 +1097,10 @@ static const struct array systemenclosure_chassistypes_array =
 static const struct record_systemsecurity data_systemsecurity[] =
 {
     { security_get_sd, security_set_sd }
+};
+static const struct record_serverfeature data_serverfeatures[] =
+{
+    { 35, 0, L"Desktop Experience" },
 };
 static const struct record_winsat data_winsat[] =
 {
@@ -4355,12 +4371,29 @@ static struct table cimv2_builtin_classes[] =
     { L"Win32_WinSAT", C(col_winsat), D(data_winsat) },
 };
 
+static struct table server_feature[] =
+{
+    { L"Win32_ServerFeature", C(col_serverfeature), D(data_serverfeatures) },
+};
+
 static struct table wmi_builtin_classes[] =
 {
     { L"MSSMBios_RawSMBiosTables", C(col_rawsmbiostables), D(data_rawsmbiostables) },
 };
 #undef C
 #undef D
+
+static BOOL is_onenote(void)
+{
+    static const char *onenote = "ONENOTE.EXE";
+    char name[MAX_PATH], *ptr;
+
+    if (!GetModuleFileNameA(NULL, name, sizeof(name)))
+        return FALSE;
+
+    ptr = strstr(name, onenote);
+    return ptr && !ptr[strlen(onenote)];
+}
 
 static const struct
 {
@@ -4386,6 +4419,9 @@ void init_table_list( void )
         list_init( &tables[ns] );
         for (i = 0; i < builtin_namespaces[ns].table_count; i++)
             list_add_tail( &tables[ns], &builtin_namespaces[ns].classes[i].entry );
+        /* CXHACK: 16057 - Client system do not support this class, for some reason OneNote asks for it anyway. */
+        if (!ns && is_onenote())
+            list_add_tail( &tables[ns], &server_feature[0].entry );
         table_list[ns] = &tables[ns];
     }
 }

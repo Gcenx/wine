@@ -45,6 +45,9 @@ extern BOOL allow_set_gamma;
 extern BOOL allow_software_rendering;
 extern BOOL disable_window_decorations;
 
+/* CrossOver Hack 14364 */
+extern BOOL force_backing_store;
+
 extern const char* debugstr_cf(CFTypeRef t);
 
 static inline CGRect cgrect_from_rect(RECT rect)
@@ -138,6 +141,8 @@ extern LRESULT macdrv_NotifyIcon(HWND hwnd, UINT msg, NOTIFYICONDATAW *data);
 extern void macdrv_CleanupIcons(HWND hwnd);
 extern LRESULT macdrv_DesktopWindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
 extern void macdrv_DestroyWindow(HWND hwnd);
+extern NTSTATUS macdrv_SetCurrentProcessExplicitAppUserModelID(LPCWSTR aumid);  /* CW Hack 22310 */
+extern NTSTATUS macdrv_GetCurrentProcessExplicitAppUserModelID(LPWSTR buffer, INT size);  /* CW Hack 22310 */
 extern void macdrv_SetDesktopWindow(HWND hwnd);
 extern void macdrv_SetFocus(HWND hwnd);
 extern void macdrv_SetLayeredWindowAttributes(HWND hwnd, COLORREF key, BYTE alpha,
@@ -246,6 +251,8 @@ extern void macdrv_release_capture(HWND hwnd, const macdrv_event *event);
 extern void macdrv_SetCapture(HWND hwnd, UINT flags);
 
 extern void macdrv_compute_keyboard_layout(struct macdrv_thread_data *thread_data);
+/* CrossOver Hack 10912: Mac Edit menu */
+extern void macdrv_edit_menu_command(const macdrv_event *event);
 extern void macdrv_keyboard_changed(const macdrv_event *event);
 extern void macdrv_key_event(HWND hwnd, const macdrv_event *event);
 extern void macdrv_hotkey_press(const macdrv_event *event);

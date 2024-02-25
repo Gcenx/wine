@@ -126,6 +126,8 @@ static const struct object_ops handle_table_ops =
     no_add_queue,                    /* add_queue */
     NULL,                            /* remove_queue */
     NULL,                            /* signaled */
+    NULL,                            /* get_esync_fd */
+    NULL,                            /* get_msync_idx */
     NULL,                            /* satisfied */
     no_signal,                       /* signal */
     no_get_fd,                       /* get_fd */

@@ -2452,6 +2452,9 @@ void wined3d_context_gl_enable_clip_distances(struct wined3d_context_gl *context
     unsigned int clip_distance_count, i;
     uint32_t disable_mask, current_mask;
 
+    if (gl_info->quirks & WINED3D_CX_QUIRK_GLSL_CLIP_BROKEN)
+        return;
+
     clip_distance_count = gl_info->limits.user_clip_distances;
     disable_mask = ~enable_mask;
     enable_mask &= wined3d_mask_from_size(clip_distance_count);

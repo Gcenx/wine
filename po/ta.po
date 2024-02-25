@@ -175,8 +175,8 @@ msgstr ""
 "கண்டுபிடிக்க முடியவில்லை. ஒயின் உங்களுக்காக தானாகவே பதிவிறக்கம் செய்து நிறுவும்.\n"
 "\n"
 "குறிப்பு: அதற்குப் பதிலாக உங்கள் விநியோகத் தொகுப்புகளைப் பயன்படுத்த "
-"பரிந்துரைக்கப்படுகிறது. விவரங்களுக்கு <a href=\"https://wiki.winehq.org/"
-"Gecko\">https://wiki.winehq.org/Gecko</a> ஐப் பார்க்கவும்."
+"பரிந்துரைக்கப்படுகிறது. விவரங்களுக்கு <a href=\"https://wiki.winehq.org/Gecko"
+"\">https://wiki.winehq.org/Gecko</a> ஐப் பார்க்கவும்."
 
 #: dlls/appwiz.cpl/appwiz.rc:110 dlls/appwiz.cpl/appwiz.rc:125
 msgid "&Install"
@@ -243,8 +243,8 @@ msgstr ""
 "கண்டுபிடிக்க முடியவில்லை. ஒயின் உங்களுக்காக தானாகவே பதிவிறக்கம் செய்து நிறுவும்.\n"
 "\n"
 "குறிப்பு: அதற்குப் பதிலாக உங்கள் விநியோகத் தொகுப்புகளைப் பயன்படுத்த "
-"பரிந்துரைக்கப்படுகிறது. விவரங்களுக்கு <a href=\"https://wiki.winehq.org/"
-"Mono\">https://wiki.winehq.org/Mono</a> ஐப் பார்க்கவும்."
+"பரிந்துரைக்கப்படுகிறது. விவரங்களுக்கு <a href=\"https://wiki.winehq.org/Mono"
+"\">https://wiki.winehq.org/Mono</a> ஐப் பார்க்கவும்."
 
 #: dlls/appwiz.cpl/appwiz.rc:31
 msgid "Add/Remove Programs"
@@ -530,7 +530,7 @@ msgstr "விவரங்களைப் பார்க்கவும்"
 
 #: dlls/comctl32/comctl32.rc:31 dlls/cryptui/cryptui.rc:235
 #: programs/regedit/regedit.rc:291 programs/taskmgr/taskmgr.rc:434
-#: programs/winedbg/winedbg.rc:61 programs/winedbg/winedbg.rc:76
+#: programs/winedbg/winedbg.rc:59 programs/winedbg/winedbg.rc:71
 #: programs/wordpad/wordpad.rc:180
 msgid "Close"
 msgstr "மூடு"
@@ -8009,7 +8009,7 @@ msgstr ""
 msgid "Sound Selection"
 msgstr ""
 
-#: dlls/msacm32/msacm32.rc:39 programs/winedbg/winedbg.rc:77
+#: dlls/msacm32/msacm32.rc:39 programs/winedbg/winedbg.rc:72
 msgid "&Save As..."
 msgstr "இவ்வாறு சேமி... (&S)"
 
@@ -17987,27 +17987,28 @@ msgid ""
 "sorry for the inconvenience."
 msgstr ""
 
-#: programs/winedbg/winedbg.rc:59
+#: programs/winedbg/winedbg.rc:57
 msgid ""
 "This can be caused by a problem in the program or a deficiency in Wine. You "
-"may want to check the <a href=\"https://appdb.winehq.org\">Application "
-"Database</a> for tips about running this application."
+"may want to check <a href=\"https://www.codeweavers.com/compatibility/"
+"\">https://www.codeweavers.com/compatibility/</a> for tips about running "
+"this application."
 msgstr ""
 
-#: programs/winedbg/winedbg.rc:62
+#: programs/winedbg/winedbg.rc:60
 msgid "Show &Details"
 msgstr ""
 
-#: programs/winedbg/winedbg.rc:67
+#: programs/winedbg/winedbg.rc:65
 msgid "Program Error Details"
 msgstr ""
 
-#: programs/winedbg/winedbg.rc:74
+#: programs/winedbg/winedbg.rc:69
 msgid ""
 "If this problem is not present under Windows and has not been reported yet, "
 "you can save the detailed information to a file using the \"Save As\" "
-"button, then <a href=\"https://wiki.winehq.org/Bugs\">file a bug report</a> "
-"and attach that file to the report."
+"button, then <a href=\"https://www.codeweavers.com/support/tickets/enter/"
+"\">file a bug report</a> and attach that file to the report."
 msgstr ""
 
 #: programs/winedbg/winedbg.rc:40

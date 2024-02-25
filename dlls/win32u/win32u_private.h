@@ -58,6 +58,9 @@ extern void move_window_bits_parent( HWND hwnd, HWND parent, const RECT *window_
                                      const RECT *valid_rects );
 extern void register_window_surface( struct window_surface *old,
                                      struct window_surface *new );
+extern struct window_surface *create_shm_surface( HWND hwnd, HWND parent, const RECT *visible_rect,
+                                                  struct window_surface *old_surface );
+extern void process_surface_message( struct flush_shm_surface_params *params );
 
 /* defwnd.c */
 extern LRESULT default_window_proc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam,

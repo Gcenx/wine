@@ -2617,7 +2617,14 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
     }
 
     case SystemCpuInformation:  /* 1 */
-        if (size >= (len = sizeof(cpu_info))) memcpy(info, &cpu_info, len);
+        if (size >= (len = sizeof(cpu_info)))
+        {
+            /* CW HACK 20810: report the emulated processor when in 32-bit-bottle/Wow64 mode */
+            if (wow64_using_32bit_prefix)
+                return NtQuerySystemInformation(SystemEmulationProcessorInformation, info, size, ret_size);
+            else
+                memcpy(info, &cpu_info, len);
+        }
         else ret = STATUS_INFO_LENGTH_MISMATCH;
         break;
 
@@ -3397,6 +3404,17 @@ NTSTATUS WINAPI NtQuerySystemInformationEx( SYSTEM_INFORMATION_CLASS class,
             machines[i].Process = supported_machines[i] == machine;
             machines[i].WoW64Container = 0;
             machines[i].ReservedZero0 = 0;
+        }
+
+        /* CW HACK 20810: report i386-only when in 32-bit-bottle/Wow64 mode */
+        if (wow64_using_32bit_prefix)
+        {
+            machines[0].Machine = IMAGE_FILE_MACHINE_I386;
+            machines[0].UserMode = 1;
+            machines[0].KernelMode = 1;
+            machines[0].Native = 1;
+            machines[0].Process = 1;
+            i = 1;
         }
 
         machines[i].Machine = 0;

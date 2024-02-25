@@ -29,6 +29,8 @@
 
 
 static NSString* const WineAppWaitQueryResponseMode = @"WineAppWaitQueryResponseMode";
+static NSString* const WineWillShowPermissionDialogNotification = @"WineWillShowPermissionDialogNotification";
+static NSString* const WineDidShowPermissionDialogNotification = @"WineDidShowPermissionDialogNotification";
 
 // Private notifications that are reliably dispatched when a window is moved by dragging its titlebar.
 // The object of the notification is the window being dragged.
@@ -42,6 +44,15 @@ static NSString* const WineActivatingAppPIDKey = @"ActivatingAppPID";
 static NSString* const WineActivatingAppPrefixKey = @"ActivatingAppPrefix";
 static NSString* const WineActivatingAppConfigDirKey = @"ActivatingAppConfigDir";
 
+/* CW Hack 22310 */
+// WineAppUserModelIDQuitRequestNotification is sent on the distributed notification center when an
+// app with an AUMID is quit via Cocoa. Any app in the same prefix with a corresponding AUMID should
+// also quit.
+static NSString* const WineAppUserModelIDQuitRequestNotification = @"WineAppUserModelIDQuitRequestNotification";
+static NSString* const WineAUMIDQuitNotificationAUMIDKey = @"AUMID";
+static NSString* const WineAUMIDQuitNotificationSourcePIDKey = @"SourcePID";
+static NSString* const WineAUMIDQuitNotificationWineConfigDirKey = @"WineConfigDir";
+static NSString* const WineAUMIDQuitNotificationWinePrefixKey = @"WinePrefix";
 
 int macdrv_err_on;
 
@@ -118,6 +129,7 @@ static NSString* WineLocalizedString(unsigned int stringID)
 
     - (void) setupObservations;
     - (void) applicationDidBecomeActive:(NSNotification *)notification;
+    - (void) handleApplicationShouldTerminateReply:(BOOL)reply;  /* CW Hack 22310 */
 
     static void PerformRequest(void *info);
 
@@ -127,10 +139,12 @@ static NSString* WineLocalizedString(unsigned int stringID)
 @implementation WineApplicationController
 
     @synthesize keyboardType, lastFlagsChanged;
+    @synthesize displaysTemporarilyUncapturedForDialog, temporarilyIgnoreResignEventsForDialog;
     @synthesize applicationIcon;
     @synthesize cursorFrames, cursorTimer, cursor;
     @synthesize mouseCaptureWindow;
     @synthesize lastSetCursorPositionTime;
+    @synthesize explicitAppUserModelID;  /* CW Hack 22310 */
 
     + (void) initialize
     {
@@ -241,6 +255,62 @@ static NSString* WineLocalizedString(unsigned int stringID)
         [super dealloc];
     }
 
+    // CrossOver Hack 10912: Mac Edit menu
+    - (BOOL) isEditMenuAction:(SEL)selector
+    {
+        return selector == @selector(copy:) || selector == @selector(cut:) ||
+               selector == @selector(delete:) || selector == @selector(paste:) ||
+               selector == @selector(selectAll:) || selector == @selector(undo:);
+    }
+
+    - (void) changeEditMenuKeyEquivalentsForWindow:(NSWindow*)window
+    {
+        if (mac_edit_menu == MAC_EDIT_MENU_DISABLED)
+        {
+            if ([window isKindOfClass:[WineWindow class]])
+            {
+                NSMutableArray* menus = [NSMutableArray arrayWithObject:[NSApp mainMenu]];
+
+                while ([menus count])
+                {
+                    NSMenu* menu = [menus objectAtIndex:0];
+                    [menus removeObjectAtIndex:0];
+
+                    for (NSMenuItem* item in [menu itemArray])
+                    {
+                        if ([self isEditMenuAction:[item action]] && ![item target] &&
+                            [[item keyEquivalent] length])
+                        {
+                            NSDictionary* record = [NSDictionary dictionaryWithObjectsAndKeys:
+                                                    item, @"menuItem",
+                                                    [item keyEquivalent], @"keyEquivalent",
+                                                    nil];
+                            if (!changedKeyEquivalents)
+                                changedKeyEquivalents = [[NSMutableArray alloc] init];
+                            [changedKeyEquivalents addObject:record];
+
+                            [item setKeyEquivalent:@""];
+                        }
+
+                        if ([item hasSubmenu])
+                            [menus addObject:[item submenu]];
+                    }
+                }
+            }
+            else
+            {
+                for (NSDictionary* record in changedKeyEquivalents)
+                {
+                    NSMenuItem* item = [record objectForKey:@"menuItem"];
+                    NSString* equiv = [record objectForKey:@"keyEquivalent"];
+                    [item setKeyEquivalent:equiv];
+                }
+
+                [changedKeyEquivalents removeAllObjects];
+            }
+        }
+    }
+
     - (void) transformProcessToForeground:(BOOL)activateIfTransformed
     {
         if ([NSApp activationPolicy] != NSApplicationActivationPolicyRegular)
@@ -298,6 +368,23 @@ static NSString* WineLocalizedString(unsigned int stringID)
             [item setSubmenu:submenu];
             [mainMenu addItem:item];
 
+            // CrossOver Hack 10912: Mac Edit menu
+            if (mac_edit_menu != MAC_EDIT_MENU_DISABLED)
+            {
+                submenu = [[[NSMenu alloc] initWithTitle:@"Edit"] autorelease];
+                [submenu addItemWithTitle:@"Undo" action:@selector(undo:) keyEquivalent:@"z"];
+                [submenu addItem:[NSMenuItem separatorItem]];
+                [submenu addItemWithTitle:@"Cut" action:@selector(cut:) keyEquivalent:@"x"];
+                [submenu addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"];
+                [submenu addItemWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"];
+                [submenu addItemWithTitle:@"Delete" action:@selector(delete:) keyEquivalent:@""];
+                [submenu addItemWithTitle:@"Select All" action:@selector(selectAll:) keyEquivalent:@"a"];
+                item = [[[NSMenuItem alloc] init] autorelease];
+                [item setTitle:@"Edit"];
+                [item setSubmenu:submenu];
+                [mainMenu addItem:item];
+            }
+
             // Window menu
             submenu = [[[NSMenu alloc] initWithTitle:WineLocalizedString(STRING_MENU_WINDOW)] autorelease];
             [submenu addItemWithTitle:WineLocalizedString(STRING_MENU_ITEM_MINIMIZE)
@@ -323,6 +410,9 @@ static NSString* WineLocalizedString(unsigned int stringID)
 
             [NSApp setMainMenu:mainMenu];
             [NSApp setWindowsMenu:submenu];
+
+            // CrossOver Hack 10912: Mac Edit menu
+            [self changeEditMenuKeyEquivalentsForWindow:[NSApp keyWindow]];
 
             [NSApp setApplicationIconImage:self.applicationIcon];
         }
@@ -1895,6 +1985,16 @@ static NSString* WineLocalizedString(unsigned int stringID)
             NSWindow* window = [note object];
             [keyWindows removeObjectIdenticalTo:window];
             [keyWindows insertObject:window atIndex:0];
+            // CrossOver Hack 10912: Mac Edit menu
+            [self changeEditMenuKeyEquivalentsForWindow:window];
+        }];
+
+        // CrossOver Hack 10912: Mac Edit menu
+        [nc addObserverForName:NSWindowDidResignKeyNotification
+                        object:nil
+                         queue:nil
+                    usingBlock:^(NSNotification *note){
+            [self changeEditMenuKeyEquivalentsForWindow:nil];
         }];
 
         [nc addObserverForName:NSWindowWillCloseNotification
@@ -1967,6 +2067,60 @@ static NSString* WineLocalizedString(unsigned int stringID)
                 selector:@selector(enabledKeyboardInputSourcesChanged)
                     name:(NSString*)kTISNotifyEnabledKeyboardInputSourcesChanged
                   object:nil];
+
+        /* CW Hack 22310 */
+        [dnc addObserver:self
+                selector:@selector(handleAppUserModelIDQuitRequest:)
+                    name:WineAppUserModelIDQuitRequestNotification
+                  object:nil
+      suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
+
+        [nc addObserverForName:WineWillShowPermissionDialogNotification
+                        object:nil
+                         queue:[NSOperationQueue mainQueue]
+                    usingBlock:^(NSNotification *note){
+            /* A system-wide permission dialog is about to be displayed which the
+             * user needs to respond to.
+             * If displays are captured for full-screen, they need to be temporarily
+             * uncaptured.
+             * Regardless of display capture, some events also need to be ignored
+             * when the dialog appears, to prevent the app from thinking it's been
+             * switched away from and minimizing itself.
+             */
+            if ([NSApp isActive])
+            {
+                if ([originalDisplayModes count] || displaysCapturedForFullscreen)
+                {
+                    NSNumber* displayID;
+                    for (displayID in originalDisplayModes)
+                    {
+                        CGDisplayModeRef mode = CGDisplayCopyDisplayMode([displayID unsignedIntValue]);
+                        [latentDisplayModes setObject:(id)mode forKey:displayID];
+                        CGDisplayModeRelease(mode);
+                    }
+
+                    CGRestorePermanentDisplayConfiguration();
+                    CGReleaseAllDisplays();
+                    [originalDisplayModes removeAllObjects];
+                    displaysCapturedForFullscreen = FALSE;
+                    displaysTemporarilyUncapturedForDialog = TRUE;
+                }
+                temporarilyIgnoreResignEventsForDialog = TRUE;
+            }
+        }];
+
+        [nc addObserverForName:WineDidShowPermissionDialogNotification
+                        object:nil
+                         queue:[NSOperationQueue mainQueue]
+                    usingBlock:^(NSNotification *note){
+            if (displaysTemporarilyUncapturedForDialog)
+            {
+                [self applicationDidBecomeActive:nil];
+
+                displaysTemporarilyUncapturedForDialog = FALSE;
+            }
+            temporarilyIgnoreResignEventsForDialog = FALSE;
+        }];
 
         if ([NSApplication instancesRespondToSelector:@selector(yieldActivationToApplication:)])
         {
@@ -2063,6 +2217,78 @@ static NSString* WineLocalizedString(unsigned int stringID)
         /* This is racy. See the note in otherWineAppWillActivate:. */
         [NSApp activate];
      }
+
+    /* CW Hack 22310 */
+    - (void) handleAppUserModelIDQuitRequest:(NSNotification *)notification
+    {
+        NSString *aumid;
+        pid_t sourcePID;
+        NSProcessInfo *ourProcess;
+        NSString *ourConfigDir, *otherConfigDir, *ourPrefix, *otherPrefix;
+
+        if (!self.explicitAppUserModelID.length) return;
+
+        sourcePID = [notification.userInfo[WineAUMIDQuitNotificationAUMIDKey] intValue];
+        ourProcess = [NSProcessInfo processInfo];
+
+        // Ignore requests from ourself
+        if (sourcePID == ourProcess.processIdentifier) return;
+
+        aumid = notification.userInfo[WineAUMIDQuitNotificationAUMIDKey];
+        if (![self.explicitAppUserModelID isEqualToString:aumid]) return;
+
+        // AUMID matches. Make sure it's from the same prefix.
+        ourConfigDir = ourProcess.environment[@"WINECONFIGDIR"];
+        otherConfigDir = notification.userInfo[WineAUMIDQuitNotificationWineConfigDirKey];
+        if (ourConfigDir.length && otherConfigDir.length &&
+            ![ourConfigDir isEqualToString:otherConfigDir])
+        {
+            return;
+        }
+
+        ourPrefix = ourProcess.environment[@"WINEPREFIX"];
+        otherPrefix = notification.userInfo[WineAUMIDQuitNotificationWinePrefixKey];
+        if (ourPrefix.length && otherPrefix.length &&
+            ![ourPrefix isEqualToString:otherPrefix])
+        {
+            return;
+        }
+
+        terminatingDueToAUMIDRequest = YES;
+        [NSApp terminate:NSApp];
+    }
+
+    /* CW Hack 22310 */
+    - (void) postAppUserModelIDQuitRequest
+    {
+        NSDictionary *userInfo;
+        NSProcessInfo *process;
+        NSString *wineConfigDir, *winePrefix;
+
+        if (!self.explicitAppUserModelID.length) return;
+
+        /* temporarily only supporting this for Steam */
+        if (![self.explicitAppUserModelID isEqualToString:@"Valve.Steam.Client"]) return;
+
+        process = [NSProcessInfo processInfo];
+        wineConfigDir = process.environment[@"WINECONFIGDIR"];
+        if (!wineConfigDir) wineConfigDir = @"";
+        winePrefix = process.environment[@"WINEPREFIX"];
+        if (!winePrefix) winePrefix = @"";
+
+        userInfo = @{
+            WineAUMIDQuitNotificationAUMIDKey: self.explicitAppUserModelID,
+            WineAUMIDQuitNotificationSourcePIDKey: @([NSProcessInfo processInfo].processIdentifier),
+            WineAUMIDQuitNotificationWineConfigDirKey: wineConfigDir,
+            WineAUMIDQuitNotificationWinePrefixKey: winePrefix
+        };
+
+        [[NSDistributedNotificationCenter defaultCenter]
+            postNotificationName:WineAppUserModelIDQuitRequestNotification
+                          object:nil
+                        userInfo:userInfo
+              deliverImmediately:YES];
+    }
 
     - (BOOL) inputSourceIsInputMethod
     {
@@ -2191,14 +2417,17 @@ static NSString* WineLocalizedString(unsigned int stringID)
 
         [self invalidateGotFocusEvents];
 
-        event = macdrv_create_event(APP_DEACTIVATED, nil);
+        if (!temporarilyIgnoreResignEventsForDialog)
+        {
+            event = macdrv_create_event(APP_DEACTIVATED, nil);
 
-        [eventQueuesLock lock];
-        for (queue in eventQueues)
-            [queue postEvent:event];
-        [eventQueuesLock unlock];
+            [eventQueuesLock lock];
+            for (queue in eventQueues)
+                [queue postEvent:event];
+            [eventQueuesLock unlock];
 
-        macdrv_release_event(event);
+            macdrv_release_event(event);
+        }
 
         [self releaseMouseCapture];
     }
@@ -2257,6 +2486,22 @@ static NSString* WineLocalizedString(unsigned int stringID)
         macdrv_release_event(event);
 
         return ret;
+    }
+
+    /* CW Hack 22310 */
+    - (void)handleApplicationShouldTerminateReply:(BOOL)reply
+    {
+        if (reply && !terminatingDueToAUMIDRequest)
+        {
+            // Normal Cocoa-initiated quit, so tell everyone else with our AUMID
+            // to quit as well.
+            [self postAppUserModelIDQuitRequest];
+        }
+
+        if (!reply)
+            terminatingDueToAUMIDRequest = NO;
+
+        [NSApp replyToApplicationShouldTerminate:reply];
     }
 
     - (void)applicationWillBecomeActive:(NSNotification *)notification
@@ -2569,12 +2814,21 @@ int macdrv_clip_cursor(CGRect r)
  * color depths from the icon resource.  If images is NULL or empty,
  * restores the default application image.
  */
-void macdrv_set_application_icon(CFArrayRef images)
+void macdrv_set_application_icon(CFArrayRef images, CFURLRef urlRef)
 {
     NSArray* imageArray = (NSArray*)images;
+    NSURL* url = (NSURL*)urlRef;
 
     OnMainThreadAsync(^{
-        [[WineApplicationController sharedController] setApplicationIconFromCGImageArray:imageArray];
+        // CrossOver Hack 13440: Get the icon from the passed-in URL if no images
+        WineApplicationController* controller = [WineApplicationController sharedController];
+        NSImage* image = nil;
+        if (!imageArray && url)
+            image = [[[NSImage alloc] initWithContentsOfURL:url] autorelease];
+        if (imageArray || ![image isValid])
+            [controller setApplicationIconFromCGImageArray:imageArray];
+        else
+            controller.applicationIcon = image;
     });
 }
 
@@ -2584,7 +2838,9 @@ void macdrv_set_application_icon(CFArrayRef images)
 void macdrv_quit_reply(int reply)
 {
     OnMainThread(^{
-        [NSApp replyToApplicationShouldTerminate:reply];
+        /* CW Hack 22310 - route this through the app controller for
+           app user model ID handling. */
+        [[WineApplicationController sharedController] handleApplicationShouldTerminateReply:reply];
     });
 }
 
@@ -2692,4 +2948,52 @@ int macdrv_is_any_wine_window_visible(void)
     });
 
     return ret;
+}
+
+/* CW Hack 22310 */
+int macdrv_set_current_process_explicit_app_user_model_id(const UniChar *aumid, size_t length)
+{
+    NSString *str_aumid;
+
+    if (!aumid) return FALSE;
+
+    str_aumid = [NSString stringWithCharacters:aumid length:length];
+    if (!str_aumid) return FALSE;
+
+    OnMainThread(^{
+        [WineApplicationController sharedController].explicitAppUserModelID = str_aumid;
+    });
+
+    return TRUE;
+}
+
+/* CW Hack 22310 */
+int macdrv_get_current_process_explicit_app_user_model_id(UniChar *buffer, size_t size)
+{
+    __block NSString *aumid;
+
+    if (!buffer) return FALSE;
+
+    OnMainThread(^{
+        aumid = [[WineApplicationController sharedController].explicitAppUserModelID copy];
+    });
+
+    if (!aumid || aumid.length == 0)
+    {
+        /* Return empty string if there's no AUMID. */
+        if (size > 0) buffer[0] = '\0';
+        [aumid release];
+        return TRUE;
+    }
+
+    if (aumid.length + 1 > size)
+    {
+        [aumid release];
+        return FALSE;
+    }
+
+    [aumid getCharacters:buffer range:NSMakeRange(0, aumid.length)];
+    buffer[aumid.length] = '\0';
+    [aumid release];
+    return TRUE;
 }

@@ -85,6 +85,8 @@ struct process
     const struct rawinput_device *rawinput_kbd;   /* rawinput keyboard device, if any */
     struct list          kernel_object;   /* list of kernel object pointers */
     pe_image_info_t      image_info;      /* main exe image info */
+    struct esync_fd     *esync_fd;        /* esync file descriptor (signaled on exit) */
+    unsigned int         msync_idx;
 };
 
 /* process functions */

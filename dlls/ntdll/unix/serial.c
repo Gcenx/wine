@@ -1095,7 +1095,7 @@ static NTSTATUS xmit_immediate(HANDLE hDevice, int fd, const char* ptr)
 }
 
 static NTSTATUS io_control( HANDLE device, HANDLE event, PIO_APC_ROUTINE apc, void *apc_user,
-                            IO_STATUS_BLOCK *io, UINT code, void *in_buffer,
+                            client_ptr_t io, UINT code, void *in_buffer,
                             UINT in_size, void *out_buffer, UINT out_size )
 {
     DWORD sz = 0, access = FILE_READ_DATA;
@@ -1103,8 +1103,8 @@ static NTSTATUS io_control( HANDLE device, HANDLE event, PIO_APC_ROUTINE apc, vo
     int fd = -1, needs_close = 0;
     enum server_fd_type type;
 
-    TRACE("%p %s %p %d %p %d %p\n",
-          device, iocode2str(code), in_buffer, in_size, out_buffer, out_size, io);
+    TRACE("%p %s %p %d %p %d\n",
+          device, iocode2str(code), in_buffer, in_size, out_buffer, out_size);
 
     switch (code)
     {
@@ -1115,8 +1115,6 @@ static NTSTATUS io_control( HANDLE device, HANDLE event, PIO_APC_ROUTINE apc, vo
         /* these are handled on the server side */
         return STATUS_NOT_SUPPORTED;
     }
-
-    io->Information = 0;
 
     if ((status = server_get_unix_fd( device, access, &fd, &needs_close, &type, NULL ))) goto error;
     if (type != FD_TYPE_SERIAL)
@@ -1294,7 +1292,7 @@ static NTSTATUS io_control( HANDLE device, HANDLE event, PIO_APC_ROUTINE apc, vo
     case IOCTL_SERIAL_WAIT_ON_MASK:
         if (out_buffer && out_size == sizeof(DWORD))
         {
-            if (!(status = wait_on(device, fd, event, iosb_client_ptr(io), out_buffer)))
+            if (!(status = wait_on(device, fd, event, io, out_buffer)))
                 sz = sizeof(DWORD);
         }
         else
@@ -1309,8 +1307,7 @@ static NTSTATUS io_control( HANDLE device, HANDLE event, PIO_APC_ROUTINE apc, vo
     }
     if (needs_close) close( fd );
  error:
-    io->Status = status;
-    io->Information = sz;
+    set_async_iosb( io, status, sz );
     if (event && status != STATUS_PENDING) NtSetEvent(event, NULL);
     return status;
 }
@@ -1319,7 +1316,7 @@ static NTSTATUS io_control( HANDLE device, HANDLE event, PIO_APC_ROUTINE apc, vo
  *		serial_DeviceIoControl
  */
 NTSTATUS serial_DeviceIoControl( HANDLE device, HANDLE event, PIO_APC_ROUTINE apc, void *apc_user,
-                                 IO_STATUS_BLOCK *io, UINT code, void *in_buffer,
+                                 client_ptr_t io, UINT code, void *in_buffer,
                                  UINT in_size, void *out_buffer, UINT out_size )
 {
     NTSTATUS    status;

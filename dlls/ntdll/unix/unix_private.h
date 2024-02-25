@@ -31,6 +31,16 @@
 
 struct msghdr;
 
+typedef struct
+{
+    union
+    {
+        NTSTATUS Status;
+        ULONG Pointer;
+    };
+    ULONG Information;
+} IO_STATUS_BLOCK32;
+
 #ifdef __i386__
 static const WORD current_machine = IMAGE_FILE_MACHINE_I386;
 #elif defined(__x86_64__)
@@ -93,6 +103,9 @@ struct ntdll_thread_data
 {
     void              *cpu_data[16];  /* reserved for CPU-specific data */
     void              *kernel_stack;  /* stack for thread startup and kernel syscalls */
+    int                esync_apc_fd;  /* fd to wait on for user APCs */
+    int               *msync_apc_addr;
+    unsigned int       msync_apc_idx;
     int                request_fd;    /* fd for sending server requests */
     int                reply_fd;      /* fd for receiving server replies */
     int                wait_fd[2];    /* fd for sleeping server requests */
@@ -159,6 +172,8 @@ extern USHORT *uctable;
 extern USHORT *lctable;
 extern SIZE_T startup_info_size;
 extern BOOL is_prefix_bootstrap;
+extern BOOL wow64_using_32bit_prefix;
+extern SECTION_IMAGE_INFORMATION main_image_info;
 extern int main_argc;
 extern char **main_argv;
 extern char **main_envp;
@@ -176,6 +191,8 @@ extern SYSTEM_CPU_INFORMATION cpu_info;
 extern struct ldt_copy __wine_ldt_copy;
 #endif
 
+extern BOOL simulate_writecopy;
+
 extern void init_environment(void);
 extern void init_startup_info(void);
 extern void *create_startup_info( const UNICODE_STRING *nt_image, ULONG process_flags,
@@ -183,7 +200,7 @@ extern void *create_startup_info( const UNICODE_STRING *nt_image, ULONG process_
                                   const pe_image_info_t *pe_info, DWORD *info_size );
 extern char **build_envp( const WCHAR *envW );
 extern char *get_alternate_wineloader( WORD machine );
-extern NTSTATUS exec_wineloader( char **argv, int socketfd, const pe_image_info_t *pe_info );
+extern NTSTATUS exec_wineloader( char **argv, int socketfd, const pe_image_info_t *pe_info, const char *image_path );
 extern NTSTATUS load_builtin( const pe_image_info_t *image_info, WCHAR *filename, USHORT machine,
                               void **addr_ptr, SIZE_T *size_ptr, ULONG_PTR limit_low, ULONG_PTR limit_high );
 extern BOOL is_builtin_path( const UNICODE_STRING *path, WORD *machine );
@@ -287,21 +304,23 @@ extern NTSTATUS set_thread_wow64_context( HANDLE handle, const void *ctx, ULONG 
 extern void fill_vm_counters( VM_COUNTERS_EX *pvmi, int unix_pid );
 extern NTSTATUS open_hkcu_key( const char *path, HANDLE *key );
 
+extern NTSTATUS sync_ioctl( HANDLE file, ULONG code, void *in_buffer, ULONG in_size,
+                            void *out_buffer, ULONG out_size );
 extern NTSTATUS cdrom_DeviceIoControl( HANDLE device, HANDLE event, PIO_APC_ROUTINE apc, void *apc_user,
-                                       IO_STATUS_BLOCK *io, UINT code, void *in_buffer,
+                                       client_ptr_t io, UINT code, void *in_buffer,
                                        UINT in_size, void *out_buffer, UINT out_size );
 extern NTSTATUS serial_DeviceIoControl( HANDLE device, HANDLE event, PIO_APC_ROUTINE apc, void *apc_user,
-                                        IO_STATUS_BLOCK *io, UINT code, void *in_buffer,
+                                        client_ptr_t io, UINT code, void *in_buffer,
                                         UINT in_size, void *out_buffer, UINT out_size );
 extern NTSTATUS serial_FlushBuffersFile( int fd );
-extern NTSTATUS sock_ioctl( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, void *apc_user, IO_STATUS_BLOCK *io,
+extern NTSTATUS sock_ioctl( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, void *apc_user, client_ptr_t io,
                             UINT code, void *in_buffer, UINT in_size, void *out_buffer, UINT out_size );
 extern NTSTATUS sock_read( HANDLE handle, int fd, HANDLE event, PIO_APC_ROUTINE apc, void *apc_user,
-                           IO_STATUS_BLOCK *io, void *buffer, ULONG length );
+                           client_ptr_t io, void *buffer, ULONG length );
 extern NTSTATUS sock_write( HANDLE handle, int fd, HANDLE event, PIO_APC_ROUTINE apc, void *apc_user,
-                            IO_STATUS_BLOCK *io, const void *buffer, ULONG length );
+                            client_ptr_t io, const void *buffer, ULONG length );
 extern NTSTATUS tape_DeviceIoControl( HANDLE device, HANDLE event, PIO_APC_ROUTINE apc, void *apc_user,
-                                      IO_STATUS_BLOCK *io, UINT code, void *in_buffer,
+                                      client_ptr_t io, UINT code, void *in_buffer,
                                       UINT in_size, void *out_buffer, UINT out_size );
 
 extern struct async_fileio *alloc_fileio( DWORD size, async_callback_t callback, HANDLE handle );
@@ -433,11 +452,7 @@ static inline void set_async_iosb( client_ptr_t iosb, NTSTATUS status, ULONG_PTR
 
     if (in_wow64_call())
     {
-        struct iosb32
-        {
-            NTSTATUS Status;
-            ULONG    Information;
-        } *io = wine_server_get_ptr( iosb );
+        IO_STATUS_BLOCK32 *io = wine_server_get_ptr( iosb );
         io->Information = info;
         WriteRelease( &io->Status, status );
     }
@@ -527,5 +542,41 @@ static inline NTSTATUS map_section( HANDLE mapping, void **ptr, SIZE_T *size, UL
     return NtMapViewOfSection( mapping, NtCurrentProcess(), ptr, user_space_wow_limit,
                                0, NULL, size, ViewShare, 0, protect );
 }
+
+/* CX Hack 23015 */
+#if defined(__APPLE__) && defined(__x86_64__)
+#include <wine/asm.h>
+
+extern void *libd3dshared_load_addr, *libd3dshared_code_end;
+
+#define GPT_IMPORT(name) sysv_##name
+#define GPT_ABI_WRAPPER(name) \
+    __ASM_GLOBAL_FUNC( name, \
+        /* Using rax for scratch to fetch externs, rcx for return address. */ \
+        "push %rax\n\t" \
+        "push %rcx\n\t" \
+        "movq " __ASM_NAME("libd3dshared_load_addr") "@GOTPCREL(%rip), %rax\n\t" \
+        /* Always use the sysv version if we didn't load libd3dshared. */ \
+        "cmpq $0, (%rax)\n\t" \
+        "je " __ASM_LOCAL_LABEL("jmp_sysv_" #name) "\n\t" \
+        /* Is the return address (rsp+16) inside libd3dshared? */ \
+        "movq 16(%rsp), %rcx\n\t" \
+        "cmpq (%rax), %rcx\n\t" \
+        "jb " __ASM_LOCAL_LABEL("jmp_sysv_" #name) "\n\t" \
+        "movq " __ASM_NAME("libd3dshared_code_end") "@GOTPCREL(%rip), %rax\n\t" \
+        "cmpq (%rax), %rcx\n\t" \
+        "ja " __ASM_LOCAL_LABEL("jmp_sysv_" #name) "\n\t" \
+        /* Yes; use the ms_abi thunk. */ \
+        "pop %rcx\n\t" \
+        "pop %rax\n\t" \
+        "jmp " __ASM_NAME("msthunk_" #name) "\n\t" \
+        /* No; use sysv. */ \
+        __ASM_LOCAL_LABEL("jmp_sysv_" #name) ":\n\t" \
+        "pop %rcx\n\t" \
+        "pop %rax\n\t" \
+        "jmp " __ASM_NAME("sysv_" #name) "\n\t" )
+#else
+#define GPT_IMPORT(name) name
+#endif
 
 #endif /* __NTDLL_UNIX_PRIVATE_H */

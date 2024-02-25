@@ -3842,7 +3842,7 @@ static GLuint shader_arb_generate_pshader(const struct wined3d_shader *shader,
         }
     }
 
-    if (shader_priv->clipplane_emulation != ~0U && args->clip)
+    if (shader_priv->clipplane_emulation != ~0U && args->super.clip)
     {
         shader_addline(buffer, "KIL fragment.texcoord[%u];\n", shader_priv->clipplane_emulation);
     }
@@ -4461,7 +4461,6 @@ static void find_arb_ps_compile_args(const struct wined3d_state *state,
         struct wined3d_context_gl *context_gl, const struct wined3d_shader *shader,
         struct arb_ps_compile_args *args)
 {
-    const struct wined3d_d3d_info *d3d_info = context_gl->c.d3d_info;
     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
     struct wined3d_device *device = context_gl->c.device;
     const struct wined3d_ivec4 *int_consts;
@@ -4486,17 +4485,6 @@ static void find_arb_ps_compile_args(const struct wined3d_state *state,
         if (bool_consts[i])
             args->bools |= 1u << i;
     }
-
-    /* Only enable the clip plane emulation KIL if at least one clipplane is enabled. The KIL instruction
-     * is quite expensive because it forces the driver to disable early Z discards. It is cheaper to
-     * duplicate the shader than have a no-op KIL instruction in every shader
-     */
-    if (!d3d_info->vs_clipping && use_vs(state)
-            && state->render_states[WINED3D_RS_CLIPPING]
-            && state->render_states[WINED3D_RS_CLIPPLANEENABLE])
-        args->clip = 1;
-    else
-        args->clip = 0;
 
     /* Skip if unused or local, or supported natively */
     int_skip = ~shader->reg_maps.integer_constants | shader->reg_maps.local_int_consts;
@@ -4956,6 +4944,11 @@ static void shader_arb_get_caps(const struct wined3d_adapter *adapter, struct sh
         }
         caps->vs_version = min(wined3d_settings.max_sm_vs, vs_version);
         caps->vs_uniform_count = min(WINED3D_MAX_VS_CONSTS_F, vs_consts);
+        if (cxgames_hacks.safe_vs_consts)
+        {
+            /* One for the posFixup, one for the helper const, and the clipplanes. */
+            caps->vs_uniform_count -= 2 + gl_info->limits.user_clip_distances;
+        }
     }
     else
     {

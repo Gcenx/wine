@@ -4851,3 +4851,22 @@ NTSTATUS WINAPI wow64___wine_send_input( UINT *args )
     ERR( "not supported\n" );
     return 0;
 }
+
+NTSTATUS WINAPI wow64___wine_get_current_process_explicit_app_user_model_id( UINT *args )
+{
+    /* CW Hack 22310 */
+
+    WCHAR *buffer = get_ptr( &args );
+    INT size = get_ulong( &args );
+
+    return __wine_get_current_process_explicit_app_user_model_id( buffer, size );
+}
+
+NTSTATUS WINAPI wow64___wine_set_current_process_explicit_app_user_model_id( UINT *args )
+{
+    /* CW Hack 22310 */
+
+    const WCHAR *aumid = get_ptr( &args );
+
+    return __wine_set_current_process_explicit_app_user_model_id( aumid );
+}

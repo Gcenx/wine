@@ -1302,6 +1302,8 @@ static BOOL is_hidden_file( const char *name )
     p = name + strlen( name );
     while (p > name && p[-1] == '/') p--;
     while (p > name && p[-1] != '/') p--;
+    /* CrossOver Hack for bug 15207 - hide files starting in ~$ */
+    if (p[0] == '~' && p[1] == '$') return TRUE;
     if (*p++ != '.') return FALSE;
     if (!*p || *p == '/') return FALSE;  /* "." directory */
     if (*p++ != '.') return TRUE;
@@ -1322,29 +1324,49 @@ static ULONG hash_short_file_name( const WCHAR *name, int length, LPWSTR buffer 
 {
     static const char hash_chars[32] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345";
 
-    LPCWSTR p, ext, end = name + length;
+    LPCWSTR p, ext, hash_end, end = name + length;
     LPWSTR dst;
     unsigned short hash;
     int i;
+
+    /* Find last dot for start of the extension */
+    for (p = name + 1, ext = NULL; p < end - 1; p++) if (*p == '.') ext = p;
+
+    /* don't include the standard 3 char .ext in the filename hash */
+    hash_end = end;
+    if (ext && ((end - ext) == 4 ))
+    {
+        /*
+         * FIXME: CodeWeavers hack alert
+         * The next five lines are a nasty hack to only activate this
+         * (more correct behaviour) for Quicken files for the moment.
+         * We don't want to break our install base of programs that have
+         * shortfile names stored in the registry or elsewhere.
+         */
+        WCHAR szqdf[]={'.','q','d','f'};
+        WCHAR szqsd[]={'.','q','s','d'};
+        WCHAR szqel[]={'.','q','e','l'};
+        WCHAR szqph[]={'.','q','p','h'};
+        if (!wcsnicmp(ext,szqdf,4) || !wcsnicmp(ext,szqsd,4) ||
+            !wcsnicmp(ext,szqph,4) || !wcsnicmp(ext,szqel,4))
+            hash_end = ext;
+    }
 
     /* Compute the hash code of the file name */
     /* If you know something about hash functions, feel free to */
     /* insert a better algorithm here... */
     if (!is_case_sensitive)
     {
-        for (p = name, hash = 0xbeef; p < end - 1; p++)
+        for (p = name, hash = 0xbeef; p < hash_end - 1; p++)
             hash = (hash<<3) ^ (hash>>5) ^ towlower(*p) ^ (towlower(p[1]) << 8);
         hash = (hash<<3) ^ (hash>>5) ^ towlower(*p); /* Last character */
     }
     else
     {
-        for (p = name, hash = 0xbeef; p < end - 1; p++)
+        for (p = name, hash = 0xbeef; p < hash_end - 1; p++)
             hash = (hash << 3) ^ (hash >> 5) ^ *p ^ (p[1] << 8);
         hash = (hash << 3) ^ (hash >> 5) ^ *p;  /* Last character */
     }
-
-    /* Find last dot for start of the extension */
-    for (p = name + 1, ext = NULL; p < end - 1; p++) if (*p == '.') ext = p;
 
     /* Copy first 4 chars, replacing invalid chars with '_' */
     for (i = 4, p = name, dst = buffer; i > 0; i--, p++)
@@ -2183,7 +2205,6 @@ static NTSTATUS get_mountmgr_fs_info( HANDLE handle, int fd, struct mountmgr_uni
     OBJECT_ATTRIBUTES attr;
     UNICODE_STRING string;
     char *unix_name;
-    IO_STATUS_BLOCK io = {{0}};
     HANDLE mountmgr;
     unsigned int status;
     int letter;
@@ -2209,8 +2230,7 @@ static NTSTATUS get_mountmgr_fs_info( HANDLE handle, int fd, struct mountmgr_uni
                                       FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_SYNCHRONOUS_IO_NONALERT );
     if (status) return status;
 
-    status = NtDeviceIoControlFile( mountmgr, NULL, NULL, NULL, &io, IOCTL_MOUNTMGR_QUERY_UNIX_DRIVE,
-                                    drive, sizeof(*drive), drive, size );
+    status = sync_ioctl( mountmgr, IOCTL_MOUNTMGR_QUERY_UNIX_DRIVE, drive, sizeof(*drive), drive, size );
     NtClose( mountmgr );
     if (status == STATUS_BUFFER_OVERFLOW) status = STATUS_SUCCESS;
     else if (status) WARN("failed to retrieve filesystem type from mountmgr, status %#x\n", status);
@@ -2223,7 +2243,7 @@ static NTSTATUS get_mountmgr_fs_info( HANDLE handle, int fd, struct mountmgr_uni
  *
  * Return a directory entry from the cached data.
  */
-static NTSTATUS get_dir_data_entry( struct dir_data *dir_data, void *info_ptr, IO_STATUS_BLOCK *io,
+static NTSTATUS get_dir_data_entry( struct dir_data *dir_data, void *info_ptr, unsigned int *used_size,
                                     ULONG max_length, FILE_INFORMATION_CLASS class,
                                     union file_directory_info **last_info )
 {
@@ -2242,7 +2262,7 @@ static NTSTATUS get_dir_data_entry( struct dir_data *dir_data, void *info_ptr, I
         TRACE( "ignoring file %s\n", names->unix_name );
         return STATUS_SUCCESS;
     }
-    start = dir_info_align( io->Information );
+    start = dir_info_align( *used_size );
     dir_size = dir_info_size( class, 0 );
     if (start + dir_size > max_length) return STATUS_MORE_ENTRIES;
 
@@ -2307,7 +2327,7 @@ static NTSTATUS get_dir_data_entry( struct dir_data *dir_data, void *info_ptr, I
     }
 
     memcpy( (char *)info + dir_size, names->long_name, min( name_len, max_length ) );
-    io->Information = start + dir_size + min( name_len, max_length );
+    *used_size = start + dir_size + min( name_len, max_length );
     if (*last_info) (*last_info)->next = (char *)info - (char *)*last_info;
     *last_info = info;
     return name_len > max_length ? STATUS_BUFFER_OVERFLOW : STATUS_SUCCESS;
@@ -2606,17 +2626,19 @@ static unsigned int get_cached_dir_data( HANDLE handle, struct dir_data **data_r
  *              NtQueryDirectoryFile   (NTDLL.@)
  */
 NTSTATUS WINAPI NtQueryDirectoryFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc_routine,
-                                      void *apc_context, IO_STATUS_BLOCK *io, void *buffer, ULONG length,
+                                      void *apc_context, IO_STATUS_BLOCK *iosb, void *buffer, ULONG length,
                                       FILE_INFORMATION_CLASS info_class, BOOLEAN single_entry,
                                       UNICODE_STRING *mask, BOOLEAN restart_scan )
 {
+    client_ptr_t io = iosb_client_ptr(iosb);
+    unsigned int used_size = 0;
     int cwd, fd, needs_close;
     enum server_fd_type type;
     struct dir_data *data;
     unsigned int status;
 
     TRACE("(%p %p %p %p %p %p 0x%08x 0x%08x 0x%08x %s 0x%08x\n",
-          handle, event, apc_routine, apc_context, io, buffer,
+          handle, event, apc_routine, apc_context, iosb, buffer,
           (int)length, info_class, single_entry, debugstr_us(mask),
           restart_scan);
 
@@ -2659,8 +2681,6 @@ NTSTATUS WINAPI NtQueryDirectoryFile( HANDLE handle, HANDLE event, PIO_APC_ROUTI
         return STATUS_INVALID_PARAMETER;
     }
 
-    io->Information = 0;
-
     mutex_lock( &dir_mutex );
 
     cwd = open( ".", O_RDONLY );
@@ -2674,7 +2694,7 @@ NTSTATUS WINAPI NtQueryDirectoryFile( HANDLE handle, HANDLE event, PIO_APC_ROUTI
 
             while (!status && data->pos < data->count)
             {
-                status = get_dir_data_entry( data, buffer, io, length, info_class, &last_info );
+                status = get_dir_data_entry( data, buffer, &used_size, length, info_class, &last_info );
                 if (!status || status == STATUS_BUFFER_OVERFLOW) data->pos++;
                 if (single_entry && last_info) break;
             }
@@ -2682,7 +2702,7 @@ NTSTATUS WINAPI NtQueryDirectoryFile( HANDLE handle, HANDLE event, PIO_APC_ROUTI
             if (!last_info) status = STATUS_NO_MORE_FILES;
             else if (status == STATUS_MORE_ENTRIES) status = STATUS_SUCCESS;
 
-            io->Status = status;
+            set_async_iosb( io, status, used_size );
         }
         if (cwd == -1 || fchdir( cwd ) == -1) chdir( "/" );
     }
@@ -2692,7 +2712,7 @@ NTSTATUS WINAPI NtQueryDirectoryFile( HANDLE handle, HANDLE event, PIO_APC_ROUTI
 
     if (needs_close) close( fd );
     if (cwd != -1) close( cwd );
-    TRACE( "=> %x (%ld)\n", status, io->Information );
+    TRACE( "=> %#x (%u)\n", status, used_size );
     return status;
 }
 
@@ -5077,7 +5097,7 @@ static BOOL async_write_proc( void *user, ULONG_PTR *info, unsigned int *status 
 
 /* do a read call through the server */
 static unsigned int server_read_file( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, void *apc_context,
-                                      IO_STATUS_BLOCK *io, void *buffer, ULONG size,
+                                      client_ptr_t io, void *buffer, ULONG size,
                                       LARGE_INTEGER *offset, ULONG *key )
 {
     struct async_irp *async;
@@ -5093,17 +5113,14 @@ static unsigned int server_read_file( HANDLE handle, HANDLE event, PIO_APC_ROUTI
 
     SERVER_START_REQ( read )
     {
-        req->async = server_async( handle, &async->io, event, apc, apc_context, iosb_client_ptr(io) );
+        req->async = server_async( handle, &async->io, event, apc, apc_context, io );
         req->pos   = offset ? offset->QuadPart : 0;
         wine_server_set_reply( req, buffer, size );
         status = virtual_locked_server_call( req );
         wait_handle = wine_server_ptr_handle( reply->wait );
         options     = reply->options;
         if (wait_handle && status != STATUS_PENDING)
-        {
-            io->Status      = status;
-            io->Information = wine_server_reply_size( reply );
-        }
+            set_async_iosb( io, status, wine_server_reply_size( reply ) );
     }
     SERVER_END_REQ;
 
@@ -5115,7 +5132,7 @@ static unsigned int server_read_file( HANDLE handle, HANDLE event, PIO_APC_ROUTI
 
 /* do a write call through the server */
 static unsigned int server_write_file( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, void *apc_context,
-                                       IO_STATUS_BLOCK *io, const void *buffer, ULONG size,
+                                       client_ptr_t io, const void *buffer, ULONG size,
                                        LARGE_INTEGER *offset, ULONG *key )
 {
     struct async_irp *async;
@@ -5131,17 +5148,14 @@ static unsigned int server_write_file( HANDLE handle, HANDLE event, PIO_APC_ROUT
 
     SERVER_START_REQ( write )
     {
-        req->async = server_async( handle, &async->io, event, apc, apc_context, iosb_client_ptr(io) );
+        req->async = server_async( handle, &async->io, event, apc, apc_context, io );
         req->pos   = offset ? offset->QuadPart : 0;
         wine_server_add_data( req, buffer, size );
         status = wine_server_call( req );
         wait_handle = wine_server_ptr_handle( reply->wait );
         options     = reply->options;
         if (wait_handle && status != STATUS_PENDING)
-        {
-            io->Status      = status;
-            io->Information = reply->size;
-        }
+            set_async_iosb( io, status, reply->size );
     }
     SERVER_END_REQ;
 
@@ -5154,7 +5168,7 @@ static unsigned int server_write_file( HANDLE handle, HANDLE event, PIO_APC_ROUT
 /* do an ioctl call through the server */
 static NTSTATUS server_ioctl_file( HANDLE handle, HANDLE event,
                                    PIO_APC_ROUTINE apc, PVOID apc_context,
-                                   IO_STATUS_BLOCK *io, UINT code,
+                                   client_ptr_t io, UINT code,
                                    const void *in_buffer, UINT in_size,
                                    PVOID out_buffer, UINT out_size )
 {
@@ -5171,7 +5185,7 @@ static NTSTATUS server_ioctl_file( HANDLE handle, HANDLE event,
     SERVER_START_REQ( ioctl )
     {
         req->code        = code;
-        req->async       = server_async( handle, &async->io, event, apc, apc_context, iosb_client_ptr(io) );
+        req->async       = server_async( handle, &async->io, event, apc, apc_context, io );
         wine_server_add_data( req, in_buffer, in_size );
         if ((code & 3) != METHOD_BUFFERED) wine_server_add_data( req, out_buffer, out_size );
         wine_server_set_reply( req, out_buffer, out_size );
@@ -5179,10 +5193,7 @@ static NTSTATUS server_ioctl_file( HANDLE handle, HANDLE event,
         wait_handle = wine_server_ptr_handle( reply->wait );
         options     = reply->options;
         if (wait_handle && status != STATUS_PENDING)
-        {
-            io->Status      = status;
-            io->Information = wine_server_reply_size( reply );
-        }
+            set_async_iosb( io, status, wine_server_reply_size( reply ));
     }
     SERVER_END_REQ;
 
@@ -5208,8 +5219,6 @@ struct io_timeouts
 static unsigned int get_io_timeouts( HANDLE handle, enum server_fd_type type, ULONG count, BOOL is_read,
                                      struct io_timeouts *timeouts )
 {
-    unsigned int status = STATUS_SUCCESS;
-
     timeouts->interval = timeouts->total = -1;
 
     switch(type)
@@ -5218,11 +5227,9 @@ static unsigned int get_io_timeouts( HANDLE handle, enum server_fd_type type, UL
     {
         /* GetCommTimeouts */
         SERIAL_TIMEOUTS st;
-        IO_STATUS_BLOCK io = {{0}};
 
-        status = NtDeviceIoControlFile( handle, NULL, NULL, NULL, &io,
-                                        IOCTL_SERIAL_GET_TIMEOUTS, NULL, 0, &st, sizeof(st) );
-        if (status) break;
+        if (sync_ioctl( handle, IOCTL_SERIAL_GET_TIMEOUTS, NULL, 0, &st, sizeof(st) ))
+            break;
 
         if (is_read)
         {
@@ -5257,8 +5264,7 @@ static unsigned int get_io_timeouts( HANDLE handle, enum server_fd_type type, UL
             {
                 req->handle = wine_server_obj_handle( handle );
                 req->flags = 0;
-                if (!(status = wine_server_call( req )) &&
-                    reply->read_timeout != TIMEOUT_INFINITE)
+                if (!wine_server_call( req ) && reply->read_timeout != TIMEOUT_INFINITE)
                     timeouts->total = reply->read_timeout / -10000;
             }
             SERVER_END_REQ;
@@ -5305,14 +5311,13 @@ static NTSTATUS get_io_avail_mode( HANDLE handle, enum server_fd_type type, BOOL
     {
         /* GetCommTimeouts */
         SERIAL_TIMEOUTS st;
-        IO_STATUS_BLOCK io = {{0}};
 
-        status = NtDeviceIoControlFile( handle, NULL, NULL, NULL, &io,
-                                        IOCTL_SERIAL_GET_TIMEOUTS, NULL, 0, &st, sizeof(st) );
-        if (status) break;
-        *avail_mode = (!st.ReadTotalTimeoutMultiplier &&
-                       !st.ReadTotalTimeoutConstant &&
-                       st.ReadIntervalTimeout == MAXDWORD);
+        if (!(status = sync_ioctl( handle, IOCTL_SERIAL_GET_TIMEOUTS, NULL, 0, &st, sizeof(st) )))
+        {
+            *avail_mode = (!st.ReadTotalTimeoutMultiplier &&
+                           !st.ReadTotalTimeoutConstant &&
+                           st.ReadIntervalTimeout == MAXDWORD);
+        }
         break;
     }
     case FD_TYPE_MAILSLOT:
@@ -5385,26 +5390,65 @@ static unsigned int set_pending_write( HANDLE device )
     return status;
 }
 
+static BOOL is_quickenpatch(void)
+{
+    static const WCHAR qkn[] = {'q','u','i','c','k','e','n','P','a','t','c','h','.','e','x','e',0};
+    WCHAR *path = NtCurrentTeb()->Peb->ProcessParameters->ImagePathName.Buffer;
+    DWORD len = sizeof(qkn)/sizeof(qkn[0]) - 1, len2 = wcslen(path);
+    return (len <= len2 && !wcsicmp( path + len2 - len, qkn ));
+}
+
+static BOOL is_red_launcher(void)
+{
+    static const WCHAR red_launcher[] = {'R','E','D','L','a','u','n','c','h','e','r','.','e','x','e',0};
+    static const WCHAR red_prelauncher[] = {'R','E','D','p','r','e','l','a','u','n','c','h','e','r','.','e','x','e',0};
+    WCHAR *path = NtCurrentTeb()->Peb->ProcessParameters->ImagePathName.Buffer;
+    DWORD path_len = wcslen(path);
+
+    DWORD len = sizeof(red_launcher) / sizeof(red_launcher[0]) - 1;
+    if (len <= path_len && !wcsicmp( path + path_len - len, red_launcher ))
+        return TRUE;
+
+    len = sizeof(red_prelauncher) / sizeof(red_prelauncher[0]) - 1;
+    return len <= path_len && !wcsicmp( path + path_len - len, red_prelauncher );
+}
+
+static void replace_dx12_string(char *buffer, ULONG length)
+{
+    static const char dx12_string[] = "\"fallback\": \"DirectX 12\"";
+    static const char dx11_string[] = "\"fallback\": \"DirectX 11\"";
+    char *dst = strstr(buffer, dx12_string);
+    if (dst)
+        memcpy(dst, dx11_string, sizeof(dx11_string) - 1);
+}
+
+/* CW HACK 14391 */
+NTSTATUS WINAPI __wine_rpc_NtReadFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, void *apc_user,
+                                IO_STATUS_BLOCK *io, void *buffer, ULONG length,
+                                LARGE_INTEGER *offset, ULONG *key )
+{
+    return NtReadFile( handle, event, apc, apc_user, io, buffer, length, offset, key );
+}
 
 /******************************************************************************
  *              NtReadFile   (NTDLL.@)
  */
 NTSTATUS WINAPI NtReadFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, void *apc_user,
-                            IO_STATUS_BLOCK *io, void *buffer, ULONG length,
+                            IO_STATUS_BLOCK *iosb, void *buffer, ULONG length,
                             LARGE_INTEGER *offset, ULONG *key )
 {
+    client_ptr_t io = iosb_client_ptr(iosb);
     int result, unix_handle, needs_close;
     unsigned int options;
     struct io_timeouts timeouts;
     unsigned int status, ret_status;
     UINT total = 0;
-    client_ptr_t iosb_ptr = iosb_client_ptr(io);
     enum server_fd_type type;
     ULONG_PTR cvalue = apc ? 0 : (ULONG_PTR)apc_user;
     BOOL send_completion = FALSE, async_read, timeout_init_done = FALSE;
 
     TRACE( "(%p,%p,%p,%p,%p,%p,0x%08x,%p,%p)\n",
-           handle, event, apc, apc_user, io, buffer, (int)length, offset, key );
+           handle, event, apc, apc_user, iosb, buffer, (int)length, offset, key );
 
     if (!io) return STATUS_ACCESS_VIOLATION;
 
@@ -5431,6 +5475,9 @@ NTSTATUS WINAPI NtReadFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, vo
             /* async I/O doesn't make sense on regular files */
             while ((result = virtual_locked_pread( unix_handle, buffer, length, offset->QuadPart )) == -1)
             {
+                /* CrossOver hack 14664 */
+                if (errno == EFAULT && is_quickenpatch() && virtual_check_buffer_for_write( buffer, length ))
+                    continue;
                 if (errno != EINTR)
                 {
                     status = errno_to_status( errno );
@@ -5468,7 +5515,7 @@ NTSTATUS WINAPI NtReadFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, vo
         if ((status = get_io_timeouts( handle, type, length, TRUE, &timeouts ))) goto err;
         if (timeouts.interval)
         {
-            status = register_async_file_read( handle, event, apc, apc_user, iosb_ptr,
+            status = register_async_file_read( handle, event, apc, apc_user, io,
                                                buffer, total, length, FALSE );
             goto err;
         }
@@ -5510,6 +5557,9 @@ NTSTATUS WINAPI NtReadFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, vo
         else if (errno != EAGAIN)
         {
             if (errno == EINTR) continue;
+            /* CrossOver hack 14664 */
+            if (errno == EFAULT && is_quickenpatch() && virtual_check_buffer_for_write( buffer, length ))
+                continue;
             if (!total) status = errno_to_status( errno );
             goto err;
         }
@@ -5524,7 +5574,7 @@ NTSTATUS WINAPI NtReadFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, vo
                 status = STATUS_SUCCESS;
                 goto done;
             }
-            status = register_async_file_read( handle, event, apc, apc_user, iosb_ptr,
+            status = register_async_file_read( handle, event, apc, apc_user, io,
                                                buffer, total, length, avail_mode );
             goto err;
         }
@@ -5568,12 +5618,14 @@ err:
     if (needs_close) close( unix_handle );
     if (status == STATUS_SUCCESS || (status == STATUS_END_OF_FILE && (!async_read || type == FD_TYPE_FILE)))
     {
-        io->Status = status;
-        io->Information = total;
+        set_async_iosb( io, status, total );
         TRACE("= SUCCESS (%u)\n", total);
+        /* CrossOver hack for bug 21786 */
+        if (!apc && !event && length == 0x1000 && status == STATUS_SUCCESS && is_red_launcher())
+            replace_dx12_string(buffer, length);
         if (event) NtSetEvent( event, NULL );
         if (apc && (!status || async_read)) NtQueueApcThread( GetCurrentThread(), (PNTAPCFUNC)apc,
-                                                              (ULONG_PTR)apc_user, iosb_ptr, 0 );
+                                                              (ULONG_PTR)apc_user, io, 0 );
     }
     else
     {
@@ -5593,19 +5645,19 @@ err:
  *              NtReadFileScatter   (NTDLL.@)
  */
 NTSTATUS WINAPI NtReadFileScatter( HANDLE file, HANDLE event, PIO_APC_ROUTINE apc, void *apc_user,
-                                   IO_STATUS_BLOCK *io, FILE_SEGMENT_ELEMENT *segments,
+                                   IO_STATUS_BLOCK *iosb, FILE_SEGMENT_ELEMENT *segments,
                                    ULONG length, LARGE_INTEGER *offset, ULONG *key )
 {
+    client_ptr_t io = iosb_client_ptr(iosb);
     int result, unix_handle, needs_close;
     unsigned int options, status;
     UINT pos = 0, total = 0;
-    client_ptr_t iosb_ptr = iosb_client_ptr(io);
     enum server_fd_type type;
     ULONG_PTR cvalue = apc ? 0 : (ULONG_PTR)apc_user;
     BOOL send_completion = FALSE;
 
     TRACE( "(%p,%p,%p,%p,%p,%p,0x%08x,%p,%p),partial stub!\n",
-           file, event, apc, apc_user, io, segments, (int)length, offset, key );
+           file, event, apc, apc_user, iosb, segments, (int)length, offset, key );
 
     if (!io) return STATUS_ACCESS_VIOLATION;
 
@@ -5649,11 +5701,10 @@ NTSTATUS WINAPI NtReadFileScatter( HANDLE file, HANDLE event, PIO_APC_ROUTINE ap
     send_completion = cvalue != 0;
 
     if (needs_close) close( unix_handle );
-    io->Status = status;
-    io->Information = total;
+    set_async_iosb( io, status, total );
     TRACE("= 0x%08x (%u)\n", status, total);
     if (event) NtSetEvent( event, NULL );
-    if (apc) NtQueueApcThread( GetCurrentThread(), (PNTAPCFUNC)apc, (ULONG_PTR)apc_user, iosb_ptr, 0 );
+    if (apc) NtQueueApcThread( GetCurrentThread(), (PNTAPCFUNC)apc, (ULONG_PTR)apc_user, io, 0 );
     if (send_completion) add_completion( file, cvalue, status, total, TRUE );
 
     return STATUS_PENDING;
@@ -5670,22 +5721,22 @@ error:
  *              NtWriteFile   (NTDLL.@)
  */
 NTSTATUS WINAPI NtWriteFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, void *apc_user,
-                             IO_STATUS_BLOCK *io, const void *buffer, ULONG length,
+                             IO_STATUS_BLOCK *iosb, const void *buffer, ULONG length,
                              LARGE_INTEGER *offset, ULONG *key )
 {
+    client_ptr_t io = iosb_client_ptr(iosb);
     int result, unix_handle, needs_close;
     unsigned int options;
     struct io_timeouts timeouts;
     unsigned int status, ret_status;
     UINT total = 0;
-    client_ptr_t iosb_ptr = iosb_client_ptr(io);
     enum server_fd_type type;
     ULONG_PTR cvalue = apc ? 0 : (ULONG_PTR)apc_user;
     BOOL send_completion = FALSE, async_write, append_write = FALSE, timeout_init_done = FALSE;
     LARGE_INTEGER offset_eof;
 
     TRACE( "(%p,%p,%p,%p,%p,%p,0x%08x,%p,%p)\n",
-           handle, event, apc, apc_user, io, buffer, (int)length, offset, key );
+           handle, event, apc, apc_user, iosb, buffer, (int)length, offset, key );
 
     if (!io) return STATUS_ACCESS_VIOLATION;
 
@@ -5827,7 +5878,7 @@ NTSTATUS WINAPI NtWriteFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, v
             {
                 req->type   = ASYNC_TYPE_WRITE;
                 req->count  = length;
-                req->async  = server_async( handle, &fileio->io, event, apc, apc_user, iosb_ptr );
+                req->async  = server_async( handle, &fileio->io, event, apc, apc_user, io );
                 status = wine_server_call( req );
             }
             SERVER_END_REQ;
@@ -5878,11 +5929,10 @@ err:
 
     if (status == STATUS_SUCCESS)
     {
-        io->Status = status;
-        io->Information = total;
+        set_async_iosb( io, status, total );
         TRACE("= SUCCESS (%u)\n", total);
         if (event) NtSetEvent( event, NULL );
-        if (apc) NtQueueApcThread( GetCurrentThread(), (PNTAPCFUNC)apc, (ULONG_PTR)apc_user, iosb_ptr, 0 );
+        if (apc) NtQueueApcThread( GetCurrentThread(), (PNTAPCFUNC)apc, (ULONG_PTR)apc_user, io, 0 );
     }
     else
     {
@@ -5900,19 +5950,19 @@ err:
  *              NtWriteFileGather   (NTDLL.@)
  */
 NTSTATUS WINAPI NtWriteFileGather( HANDLE file, HANDLE event, PIO_APC_ROUTINE apc, void *apc_user,
-                                   IO_STATUS_BLOCK *io, FILE_SEGMENT_ELEMENT *segments,
+                                   IO_STATUS_BLOCK *iosb, FILE_SEGMENT_ELEMENT *segments,
                                    ULONG length, LARGE_INTEGER *offset, ULONG *key )
 {
+    client_ptr_t io = iosb_client_ptr(iosb);
     int result, unix_handle, needs_close;
     unsigned int options, status;
     UINT pos = 0, total = 0;
-    client_ptr_t iosb_ptr = iosb_client_ptr(io);
     enum server_fd_type type;
     ULONG_PTR cvalue = apc ? 0 : (ULONG_PTR)apc_user;
     BOOL send_completion = FALSE;
 
     TRACE( "(%p,%p,%p,%p,%p,%p,0x%08x,%p,%p),partial stub!\n",
-           file, event, apc, apc_user, io, segments, (int)length, offset, key );
+           file, event, apc, apc_user, iosb, segments, (int)length, offset, key );
 
     if (length % page_size) return STATUS_INVALID_PARAMETER;
     if (!io) return STATUS_ACCESS_VIOLATION;
@@ -5967,11 +6017,10 @@ NTSTATUS WINAPI NtWriteFileGather( HANDLE file, HANDLE event, PIO_APC_ROUTINE ap
     if (needs_close) close( unix_handle );
     if (status == STATUS_SUCCESS)
     {
-        io->Status = status;
-        io->Information = total;
+        set_async_iosb( io, status, total );
         TRACE("= SUCCESS (%u)\n", total);
         if (event) NtSetEvent( event, NULL );
-        if (apc) NtQueueApcThread( GetCurrentThread(), (PNTAPCFUNC)apc, (ULONG_PTR)apc_user, iosb_ptr, 0 );
+        if (apc) NtQueueApcThread( GetCurrentThread(), (PNTAPCFUNC)apc, (ULONG_PTR)apc_user, io, 0 );
     }
     else
     {
@@ -5987,14 +6036,15 @@ NTSTATUS WINAPI NtWriteFileGather( HANDLE file, HANDLE event, PIO_APC_ROUTINE ap
  *              NtDeviceIoControlFile   (NTDLL.@)
  */
 NTSTATUS WINAPI NtDeviceIoControlFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, void *apc_context,
-                                       IO_STATUS_BLOCK *io, ULONG code, void *in_buffer, ULONG in_size,
+                                       IO_STATUS_BLOCK *iosb, ULONG code, void *in_buffer, ULONG in_size,
                                        void *out_buffer, ULONG out_size )
 {
+    client_ptr_t io = iosb_client_ptr(iosb);
     ULONG device = (code >> 16);
     NTSTATUS status = STATUS_NOT_SUPPORTED;
 
     TRACE( "(%p,%p,%p,%p,%p,0x%08x,%p,0x%08x,%p,0x%08x)\n",
-           handle, event, apc, apc_context, io, (int)code,
+           handle, event, apc, apc_context, iosb, (int)code,
            in_buffer, (int)in_size, out_buffer, (int)out_size );
 
     /* some broken applications call this frequently with INVALID_HANDLE_VALUE,
@@ -6031,8 +6081,21 @@ NTSTATUS WINAPI NtDeviceIoControlFile( HANDLE handle, HANDLE event, PIO_APC_ROUT
         return server_ioctl_file( handle, event, apc, apc_context, io, code,
                                   in_buffer, in_size, out_buffer, out_size );
 
-    if (status != STATUS_PENDING && !NT_ERROR(status)) io->Status = status;
+    if (status != STATUS_PENDING && !NT_ERROR(status))
+        set_async_iosb( io, status, 0 );
     return status;
+}
+
+
+/* helper for internal ioctl calls */
+NTSTATUS sync_ioctl( HANDLE file, ULONG code, void *in_buffer, ULONG in_size, void *out_buffer, ULONG out_size )
+{
+    IO_STATUS_BLOCK32 io32;
+    IO_STATUS_BLOCK io;
+
+    /* the 32-bit iosb is filled for overlapped file handles */
+    io.Pointer = &io32;
+    return NtDeviceIoControlFile( file, NULL, NULL, NULL, &io, code, in_buffer, in_size, out_buffer, out_size );
 }
 
 
@@ -6064,13 +6127,15 @@ static void ignore_server_ioctl_struct_holes( ULONG code, const void *in_buffer,
  *              NtFsControlFile   (NTDLL.@)
  */
 NTSTATUS WINAPI NtFsControlFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, void *apc_context,
-                                 IO_STATUS_BLOCK *io, ULONG code, void *in_buffer, ULONG in_size,
+                                 IO_STATUS_BLOCK *iosb, ULONG code, void *in_buffer, ULONG in_size,
                                  void *out_buffer, ULONG out_size )
 {
+    client_ptr_t io = iosb_client_ptr(iosb);
+    ULONG_PTR information = 0;
     NTSTATUS status;
 
     TRACE( "(%p,%p,%p,%p,%p,0x%08x,%p,0x%08x,%p,0x%08x)\n",
-           handle, event, apc, apc_context, io, (int)code,
+           handle, event, apc, apc_context, iosb, (int)code,
            in_buffer, (int)in_size, out_buffer, (int)out_size );
 
     if (!io) return STATUS_INVALID_PARAMETER;
@@ -6110,19 +6175,19 @@ NTSTATUS WINAPI NtFsControlFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE ap
             buffer->StartingVcn.QuadPart        = 1;
             buffer->Extents[0].NextVcn.QuadPart = 0;
             buffer->Extents[0].Lcn.QuadPart     = 0;
-            io->Information = sizeof(RETRIEVAL_POINTERS_BUFFER);
+            information = sizeof(RETRIEVAL_POINTERS_BUFFER);
             status = STATUS_SUCCESS;
         }
         else
         {
-            io->Information = 0;
+            information = 0;
             status = STATUS_BUFFER_TOO_SMALL;
         }
         break;
     }
 
     case FSCTL_GET_REPARSE_POINT:
-        io->Information = 0;
+        information = 0;
         if (out_buffer && out_size)
         {
             FIXME("FSCTL_GET_REPARSE_POINT semi-stub\n");
@@ -6137,7 +6202,7 @@ NTSTATUS WINAPI NtFsControlFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE ap
         int fd, needs_close;
         struct stat st;
 
-        io->Information = 0;
+        information = 0;
         if (out_size >= sizeof(*info))
         {
             status = server_get_unix_fd( handle, 0, &fd, &needs_close, NULL, NULL );
@@ -6147,7 +6212,7 @@ NTSTATUS WINAPI NtFsControlFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE ap
             memset( info, 0, sizeof(*info) );
             memcpy( info->ObjectId, &st.st_dev, sizeof(st.st_dev) );
             memcpy( info->ObjectId + 8, &st.st_ino, sizeof(st.st_ino) );
-            io->Information = sizeof(*info);
+            information = sizeof(*info);
         }
         else status = STATUS_BUFFER_TOO_SMALL;
         break;
@@ -6155,7 +6220,7 @@ NTSTATUS WINAPI NtFsControlFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE ap
 
     case FSCTL_SET_SPARSE:
         TRACE("FSCTL_SET_SPARSE: Ignoring request\n");
-        io->Information = 0;
+        information = 0;
         status = STATUS_SUCCESS;
         break;
     default:
@@ -6163,7 +6228,8 @@ NTSTATUS WINAPI NtFsControlFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE ap
                                   in_buffer, in_size, out_buffer, out_size );
     }
 
-    if (status != STATUS_PENDING) io->Status = status;
+    if (status != STATUS_PENDING)
+        set_async_iosb( io, status, information );
     return status;
 }
 

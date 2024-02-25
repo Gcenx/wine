@@ -869,6 +869,13 @@ static BOOL match_no_independent_bit_depths(const struct wined3d_gl_info *gl_inf
     return status != GL_FRAMEBUFFER_COMPLETE;
 }
 
+static BOOL match_nouveau(const struct wined3d_gl_info *gl_info,
+        struct wined3d_caps_gl_ctx *ctx, const char *gl_renderer, enum wined3d_gl_vendor gl_vendor,
+        enum wined3d_pci_vendor card_vendor, enum wined3d_pci_device device)
+{
+    return gl_vendor == GL_VENDOR_MESA && card_vendor == HW_VENDOR_NVIDIA;
+}
+
 static void quirk_apple_glsl_constants(struct wined3d_gl_info *gl_info)
 {
     /* MacOS needs uniforms for relative addressing offsets. This can
@@ -947,6 +954,11 @@ static void quirk_disable_nvvp_clip(struct wined3d_gl_info *gl_info)
     gl_info->quirks |= WINED3D_QUIRK_NV_CLIP_BROKEN;
 }
 
+static void quirk_apple_no_glsl_clip(struct wined3d_gl_info *gl_info)
+{
+    gl_info->quirks |= WINED3D_CX_QUIRK_GLSL_CLIP_BROKEN;
+}
+
 static void quirk_fbo_tex_update(struct wined3d_gl_info *gl_info)
 {
     gl_info->quirks |= WINED3D_QUIRK_FBO_TEX_UPDATE;
@@ -1005,6 +1017,11 @@ static void quirk_no_independent_bit_depths(struct wined3d_gl_info *gl_info)
     gl_info->quirks |= WINED3D_QUIRK_NO_INDEPENDENT_BIT_DEPTHS;
 }
 
+static void quirk_broken_multithread_gl(struct wined3d_gl_info *gl_info)
+{
+    gl_info->quirks |= WINED3D_CX_QUIRK_BROKEN_MULTITHREAD_GL;
+}
+
 static const struct wined3d_gpu_description *query_gpu_description(const struct wined3d_gl_info *gl_info,
         UINT64 *vram_bytes)
 {
@@ -1060,7 +1077,15 @@ static void fixup_extensions(struct wined3d_gl_info *gl_info, struct wined3d_cap
         {
             match_apple,
             quirk_apple_glsl_constants,
-            "Apple GLSL uniform override"
+            "Reserving 12 GLSL uniforms on OSX"
+        },
+        /* Additionally to matching the apple vendor this code could try to compile a testing NVvp shader
+         * that writes to result.clip[n]. This syntax is broken on osx
+         */
+        {
+            match_apple,
+            quirk_apple_no_glsl_clip,
+            "Disabled vertex shader clipping on Macs"
         },
         {
             match_geforce5,
@@ -1131,6 +1156,11 @@ static void fixup_extensions(struct wined3d_gl_info *gl_info, struct wined3d_cap
             match_no_independent_bit_depths,
             quirk_no_independent_bit_depths,
             "No support for MRT with independent bit depths"
+        },
+        {
+            match_nouveau,
+            quirk_broken_multithread_gl,
+            "broken OpenGL calls from multiple threads in the same process"
         },
     };
 
@@ -1266,7 +1296,6 @@ static enum wined3d_feature_level feature_level_from_caps(const struct wined3d_g
     shader_model = min(shader_model, max(shader_caps->ds_version, 4));
 
     if (gl_info->supported[WINED3D_GL_VERSION_3_2]
-            && gl_info->supported[ARB_POLYGON_OFFSET_CLAMP]
             && gl_info->supported[ARB_SAMPLER_OBJECTS])
     {
         if (shader_model >= 5
@@ -3852,6 +3881,27 @@ static BOOL wined3d_adapter_init_gl_caps(struct wined3d_adapter_gl *adapter_gl,
         device = wined3d_guess_card(feature_level, gl_renderer_str, &gl_vendor, &vendor);
         TRACE("Guessed device PCI ID 0x%04x.\n", device);
 
+        /* CW HACK 23042: Counter-Strike 2 uses D3D9 to get the driver version, but D3D11 for everything else.
+         * D3DMetal reports the GPU is AMD, and the game expects the D3D9 DriverVersion number to be for an AMD driver.
+         * Apple GPUs end up reporting as an 8800 GTX since they hit fallback paths and Apple OGL only supports FL10_1.
+         * Replace that with a recent AMD GPU so an AMD driver version is returned and the check succeeds.
+         */
+        if (vendor == HW_VENDOR_NVIDIA && device == CARD_NVIDIA_GEFORCE_8800GTX && strstr(gl_vendor_str, "Apple"))
+        {
+            WCHAR name[MAX_PATH], *module_exe;
+            if (GetModuleFileNameW(NULL, name, sizeof(name)))
+            {
+                module_exe = wcsrchr(name, '\\');
+                module_exe = module_exe ? module_exe + 1 : name;
+
+                if (!lstrcmpW(module_exe, L"cs2.exe"))
+                {
+                    vendor = HW_VENDOR_AMD;
+                    device = CARD_AMD_RADEON_RX_480;
+                }
+            }
+        }
+
         if (!(caps_gl_ctx->gpu_description = wined3d_get_gpu_description(vendor, device)))
         {
             ERR("Card %04x:%04x not found in driver DB.\n", vendor, device);
@@ -5207,6 +5257,8 @@ static void wined3d_adapter_gl_init_d3d_info(struct wined3d_adapter_gl *adapter_
     d3d_info->clip_control = !!gl_info->supported[ARB_CLIP_CONTROL];
     d3d_info->full_ffp_varyings = !!(shader_caps.wined3d_caps & WINED3D_SHADER_CAP_FULL_FFP_VARYINGS);
     d3d_info->scaled_resolve = !!gl_info->supported[EXT_FRAMEBUFFER_MULTISAMPLE_BLIT_SCALED];
+    d3d_info->emulated_clipplanes = !!(gl_info->quirks & WINED3D_CX_QUIRK_GLSL_CLIP_BROKEN);
+    d3d_info->multithread_safe = !(gl_info->quirks & WINED3D_CX_QUIRK_BROKEN_MULTITHREAD_GL);
     d3d_info->pbo = !!gl_info->supported[ARB_PIXEL_BUFFER_OBJECT];
     d3d_info->subpixel_viewport = gl_info->limits.viewport_subpixel_bits >= 8;
     d3d_info->fences = wined3d_fence_supported(gl_info);

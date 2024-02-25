@@ -232,6 +232,8 @@ struct wined3d_d3d_info
     uint32_t clip_control : 1;
     uint32_t full_ffp_varyings : 1;
     uint32_t scaled_resolve : 1;
+    uint32_t emulated_clipplanes : 1;
+    uint32_t multithread_safe : 1;
     uint32_t pbo : 1;
     uint32_t subpixel_viewport : 1;
     uint32_t fences : 1;
@@ -476,6 +478,7 @@ struct wined3d_settings
     unsigned int sample_count;
     BOOL check_float_constants;
     unsigned int strict_shader_math;
+    unsigned int multiply_special;
     unsigned int max_sm_vs;
     unsigned int max_sm_hs;
     unsigned int max_sm_ds;
@@ -488,6 +491,13 @@ struct wined3d_settings
 };
 
 extern struct wined3d_settings wined3d_settings;
+
+struct cxgames_hacks
+{
+    BOOL safe_vs_consts;
+};
+
+extern struct cxgames_hacks cxgames_hacks;
 
 enum wined3d_shader_resource_type
 {
@@ -1488,6 +1498,8 @@ struct ps_compile_args
     WORD shadow; /* WINED3D_MAX_FRAGMENT_SAMPLERS, 16 */
     WORD texcoords_initialized; /* WINED3D_MAX_FFP_TEXTURES, 8 */
     WORD padding_to_dword;
+    /* Emulate clipping via KIL / discard. */
+    BOOL clip;
     DWORD pointsprite : 1;
     DWORD flatshading : 1;
     DWORD alpha_test_func : 3;
@@ -1515,6 +1527,7 @@ struct vs_compile_args
     BYTE flatshading : 1;
     BYTE next_shader_type : 3;
     BYTE padding : 1;
+    DWORD emulated_clipplanes;
 };
 
 struct ds_compile_args
@@ -2762,6 +2775,7 @@ struct wined3d_ffp_vs_settings
 
     DWORD swizzle_map; /* MAX_ATTRIBS, 32 */
 
+    DWORD emulated_clipplanes;
     unsigned int texgen[WINED3D_MAX_FFP_TEXTURES];
 };
 
@@ -5041,5 +5055,23 @@ static inline bool wined3d_map_persistent(void)
 #define WINED3D_OPENGL_WINDOW_CLASS_NAME "WineD3D_OpenGL"
 
 extern CRITICAL_SECTION wined3d_command_cs;
+
+static inline DWORD find_emulated_clipplanes(const struct wined3d_context *context,
+        const struct wined3d_state *state)
+{
+    const struct wined3d_d3d_info *d3d_info = context->d3d_info;
+
+    if (!d3d_info->emulated_clipplanes)
+        return 0;
+    if (!state->render_states[WINED3D_RS_CLIPPING])
+        return 0;
+    /* With pixelshaders, emulate all enabled clipplanes (disabled per
+     * shader if no free texcoord is found). */
+    if (use_ps(state))
+        return state->render_states[WINED3D_RS_CLIPPLANEENABLE];
+    if (context->lowest_disabled_stage >= d3d_info->ffp_fragment_caps.max_blend_stages)
+        return 0;
+    return state->render_states[WINED3D_RS_CLIPPLANEENABLE];
+}
 
 #endif

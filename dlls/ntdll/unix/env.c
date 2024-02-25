@@ -65,6 +65,7 @@ WOW_PEB *wow_peb = NULL;
 USHORT *uctable = NULL, *lctable = NULL;
 SIZE_T startup_info_size = 0;
 BOOL is_prefix_bootstrap = FALSE;
+BOOL wow64_using_32bit_prefix = FALSE;
 
 static const WCHAR bootstrapW[] = {'W','I','N','E','B','O','O','T','S','T','R','A','P','M','O','D','E'};
 
@@ -1108,6 +1109,12 @@ static void add_dynamic_environment( WCHAR **env, SIZE_T *pos, SIZE_T *size )
     append_envA( env, pos, size, "WINEUSERLOCALE", user_locale );
     append_envA( env, pos, size, "SystemDrive", "C:" );
     append_envA( env, pos, size, "SystemRoot", "C:\\windows" );
+
+    /* CW HACK 23120: Quicken installs in new bottles need this to be set. */
+    append_envA( env, pos, size, "windir", "C:\\windows" );
+
+    /* CW HACK 20810: Set this environment variable so PE code can look for it. */
+    if (wow64_using_32bit_prefix) append_envA( env, pos, size, "WINEWOW6432BPREFIXMODE", "1" );
 }
 
 

@@ -872,6 +872,9 @@ static BOOL unpack_message( HWND hwnd, UINT message, WPARAM *wparam, LPARAM *lpa
         memcpy( &ps->hook, &h_extra, sizeof(h_extra) );
         break;
     }
+    case WM_WINE_FLUSHSHMSURFACE:
+        minsize = sizeof(struct flush_shm_surface_params);
+        break;
     case CB_GETCOMBOBOXINFO:
     {
         COMBOBOXINFO cbi = { sizeof(COMBOBOXINFO) };
@@ -1241,6 +1244,9 @@ static size_t pack_message( HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         push_data( data, (LPVOID)h_extra->lparam, sizeof(MSLLHOOKSTRUCT) );
         return 0;
     }
+    case WM_WINE_FLUSHSHMSURFACE:
+        push_data( data, (struct flush_shm_surface_params *)lparam, sizeof(struct flush_shm_surface_params) );
+        return 0;
     case WM_NCPAINT:
         if (wparam <= 1) return 0;
         FIXME( "WM_NCPAINT hdc packing not supported yet\n" );
@@ -2122,6 +2128,9 @@ static LRESULT handle_internal_message( HWND hwnd, UINT msg, WPARAM wparam, LPAR
     case WM_WINE_UPDATEWINDOWSTATE:
         update_window_state( hwnd );
         return 0;
+    case WM_WINE_FLUSHSHMSURFACE:
+        process_surface_message( (struct flush_shm_surface_params *)lparam );
+        return 1;
     default:
         if (msg >= WM_WINE_FIRST_DRIVER_MSG && msg <= WM_WINE_LAST_DRIVER_MSG)
             return user_driver->pWindowMessage( hwnd, msg, wparam, lparam );
@@ -2913,6 +2922,15 @@ static int peek_message( MSG *msg, HWND hwnd, UINT first, UINT last, UINT flags,
                 if (!ret) continue; /* ignore it */
                 info.msg.wParam = result.wparam;
                 info.msg.lParam = result.lparam;
+            }
+            /* CXHACK 19488 */
+            if (info.msg.message == WM_PAINT &&
+                    flags == (PM_REMOVE | PM_QS_INPUT | PM_QS_POSTMESSAGE | PM_QS_PAINT | PM_QS_SENDMESSAGE) &&
+                    (get_window_long( info.msg.hwnd, GWL_EXSTYLE ) & WS_EX_COMPOSITED ))
+            {
+                send_message( info.msg.hwnd, info.msg.message, info.msg.wParam, info.msg.lParam );
+                flags &= ~PM_QS_PAINT;
+                continue;
             }
             *msg = info.msg;
             msg->pt = point_phys_to_win_dpi( info.msg.hwnd, info.msg.pt );

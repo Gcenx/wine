@@ -238,8 +238,9 @@
     SYSCALL_ENTRY( 0x00ea, NtWriteFileGather, 36 ) \
     SYSCALL_ENTRY( 0x00eb, NtWriteVirtualMemory, 20 ) \
     SYSCALL_ENTRY( 0x00ec, NtYieldExecution, 0 ) \
-    SYSCALL_ENTRY( 0x00ed, wine_nt_to_unix_file_name, 16 ) \
-    SYSCALL_ENTRY( 0x00ee, wine_unix_to_nt_file_name, 12 )
+    SYSCALL_ENTRY( 0x00ed, __wine_rpc_NtReadFile, 36 ) \
+    SYSCALL_ENTRY( 0x00ee, wine_nt_to_unix_file_name, 16 ) \
+    SYSCALL_ENTRY( 0x00ef, wine_unix_to_nt_file_name, 12 )
 
 #define ALL_SYSCALLS64 \
     SYSCALL_ENTRY( 0x0000, NtAcceptConnectPort, 48 ) \
@@ -474,5 +475,6 @@
     SYSCALL_ENTRY( 0x00e5, NtWriteFileGather, 72 ) \
     SYSCALL_ENTRY( 0x00e6, NtWriteVirtualMemory, 40 ) \
     SYSCALL_ENTRY( 0x00e7, NtYieldExecution, 0 ) \
-    SYSCALL_ENTRY( 0x00e8, wine_nt_to_unix_file_name, 32 ) \
-    SYSCALL_ENTRY( 0x00e9, wine_unix_to_nt_file_name, 24 )
+    SYSCALL_ENTRY( 0x00e8, __wine_rpc_NtReadFile, 72 ) \
+    SYSCALL_ENTRY( 0x00e9, wine_nt_to_unix_file_name, 32 ) \
+    SYSCALL_ENTRY( 0x00ea, wine_unix_to_nt_file_name, 24 )

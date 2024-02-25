@@ -253,6 +253,39 @@ NTSTATUS wg_init_gstreamer(void *arg)
     char **argv = args;
     GError *err;
 
+    /* CW HACK 22668: use separate registry files for different architectures */
+    {
+        const char *e;
+        if ((e = getenv("WINE_GST_REGISTRY_DIR")))
+        {
+            char gst_reg[PATH_MAX];
+#if defined(__x86_64__)
+            const char *arch = "/gstreamer-1.0-registry.x86_64.bin";
+#elif defined(__i386__)
+            const char *arch = "/gstreamer-1.0-registry.i386.bin";
+#else
+#error Bad arch
+#endif
+            strcpy(gst_reg, e);
+            strcat(gst_reg, arch);
+            setenv("GST_REGISTRY", gst_reg, 1);
+        }
+    }
+
+    /* CW HACK 22668: set different plugin path based on architecture */
+    {
+#if defined(__x86_64__)
+        const char *e = getenv("WINE_GST_PLUGIN_SYSTEM_PATH_64");
+#elif defined(__i386__)
+        const char *e = getenv("WINE_GST_PLUGIN_SYSTEM_PATH_32");
+#else
+#error Bad arch
+#endif
+
+        if (e)
+            setenv("GST_PLUGIN_SYSTEM_PATH", e, 1);
+    }
+
     if (!gst_init_check(&argc, &argv, &err))
     {
         fprintf(stderr, "winegstreamer: failed to initialize GStreamer: %s\n", err->message);

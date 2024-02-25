@@ -2813,16 +2813,14 @@ static NTSTATUS GetInquiryData(int fd, PSCSI_ADAPTER_BUS_INFO BufferOut, DWORD O
  *		cdrom_DeviceIoControl
  */
 NTSTATUS cdrom_DeviceIoControl( HANDLE device, HANDLE event, PIO_APC_ROUTINE apc, void *apc_user,
-                                IO_STATUS_BLOCK *io, UINT code, void *in_buffer,
+                                client_ptr_t io, UINT code, void *in_buffer,
                                 UINT in_size, void *out_buffer, UINT out_size )
 {
     DWORD       sz = 0;
     NTSTATUS    status = STATUS_SUCCESS;
     int fd, needs_close, dev = 0;
 
-    TRACE( "%p %s %p %d %p %d %p\n", device, iocodex(code), in_buffer, in_size, out_buffer, out_size, io );
-
-    io->Information = 0;
+    TRACE( "%p %s %p %d %p %d\n", device, iocodex(code), in_buffer, in_size, out_buffer, out_size );
 
     if ((status = server_get_unix_fd( device, 0, &fd, &needs_close, NULL, NULL )))
     {
@@ -3122,8 +3120,7 @@ NTSTATUS cdrom_DeviceIoControl( HANDLE device, HANDLE event, PIO_APC_ROUTINE apc
     }
     if (needs_close) close( fd );
  error:
-    io->Status = status;
-    io->Information = sz;
+    set_async_iosb( io, status, sz );
     if (event) NtSetEvent(event, NULL);
     return status;
 }

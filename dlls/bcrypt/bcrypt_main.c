@@ -272,7 +272,7 @@ static struct object *get_object( BCRYPT_HANDLE handle, ULONG magic )
     }
 
     idx = (ULONG_PTR)handle >> 4;
-    if (idx > ARRAY_SIZE(pseudo_algorithms) || !pseudo_algorithms[idx].hdr.magic)
+    if (idx >= ARRAY_SIZE(pseudo_algorithms) || !pseudo_algorithms[idx].hdr.magic)
     {
         FIXME( "pseudo-handle %p not supported\n", handle );
         return NULL;
@@ -887,6 +887,22 @@ static NTSTATUS set_key_property( struct key *key, const WCHAR *prop, UCHAR *val
         key->u.a.bitlen = *(DWORD*)value;
         return STATUS_SUCCESS;
     }
+    else if (!wcscmp( prop, BCRYPT_DH_PARAMETERS ))
+    {
+        BCRYPT_DH_PARAMETER_HEADER *hdr = (BCRYPT_DH_PARAMETER_HEADER *)value;
+        struct key_asymmetric_import_params params;
+
+        if (key->u.a.flags & KEY_FLAG_FINALIZED) return STATUS_INVALID_HANDLE;
+        if (key->alg_id != ALG_ID_DH || size < sizeof(*hdr) || hdr->cbLength != size ||
+            hdr->dwMagic != BCRYPT_DH_PARAMETERS_MAGIC || hdr->cbKeyLength != key->u.a.bitlen / 8)
+            return STATUS_INVALID_PARAMETER;
+
+        params.key   = key;
+        params.flags = KEY_IMPORT_FLAG_DH_PARAMETERS;
+        params.buf   = value;
+        params.len   = size;
+        return UNIX_CALL( key_asymmetric_import, &params );
+    }
 
     FIXME( "unsupported key property %s\n", debugstr_w(prop) );
     return STATUS_NOT_IMPLEMENTED;
@@ -900,6 +916,21 @@ static NTSTATUS get_hash_property( const struct hash *hash, const WCHAR *prop, U
     if (status == STATUS_NOT_IMPLEMENTED)
         FIXME( "unsupported property %s\n", debugstr_w(prop) );
     return status;
+}
+
+static NTSTATUS get_dh_property( const struct key *key, const WCHAR *prop, UCHAR *buf, ULONG size, ULONG *ret_size )
+{
+    struct key_asymmetric_export_params params;
+
+    if (wcscmp( prop, BCRYPT_DH_PARAMETERS )) return STATUS_NOT_SUPPORTED;
+    if (!(key->u.a.flags & KEY_FLAG_FINALIZED)) return STATUS_INVALID_HANDLE;
+
+    params.key     = (struct key *)key;
+    params.flags   = KEY_EXPORT_FLAG_DH_PARAMETERS;
+    params.buf     = buf;
+    params.len     = size;
+    params.ret_len = ret_size;
+    return UNIX_CALL( key_asymmetric_export, &params );
 }
 
 static NTSTATUS get_key_property( const struct key *key, const WCHAR *prop, UCHAR *buf, ULONG size, ULONG *ret_size )
@@ -924,6 +955,9 @@ static NTSTATUS get_key_property( const struct key *key, const WCHAR *prop, UCHA
     case ALG_ID_AES:
         if (!wcscmp( prop, BCRYPT_AUTH_TAG_LENGTH )) return STATUS_NOT_SUPPORTED;
         return get_aes_property( key->u.s.mode, prop, buf, size, ret_size );
+
+    case ALG_ID_DH:
+        return get_dh_property( key, prop, buf, size, ret_size );
 
     default:
         FIXME( "unsupported algorithm %u\n", key->alg_id );
@@ -1175,6 +1209,8 @@ static NTSTATUS key_asymmetric_create( enum alg_id alg_id, ULONG bitlen, struct 
         ERR( "no encryption support\n" );
         return STATUS_NOT_IMPLEMENTED;
     }
+
+    if (alg_id == ALG_ID_DH && bitlen < 512) return STATUS_INVALID_PARAMETER;
 
     if (!(key = calloc( 1, sizeof(*key) ))) return STATUS_NO_MEMORY;
     key->hdr.magic  = MAGIC_KEY;
@@ -1703,9 +1739,6 @@ static NTSTATUS key_import_pair( struct algorithm *alg, const WCHAR *type, BCRYP
             key_destroy( key );
             return status;
         }
-
-        *ret_key = key;
-        return STATUS_SUCCESS;
     }
     else if (!wcscmp( type, BCRYPT_ECCPRIVATE_BLOB ))
     {
@@ -1750,9 +1783,6 @@ static NTSTATUS key_import_pair( struct algorithm *alg, const WCHAR *type, BCRYP
             key_destroy( key );
             return status;
         }
-
-        *ret_key = key;
-        return STATUS_SUCCESS;
     }
     else if (!wcscmp( type, BCRYPT_RSAPUBLIC_BLOB ))
     {
@@ -1775,9 +1805,6 @@ static NTSTATUS key_import_pair( struct algorithm *alg, const WCHAR *type, BCRYP
             key_destroy( key );
             return status;
         }
-
-        *ret_key = key;
-        return STATUS_SUCCESS;
     }
     else if (!wcscmp( type, BCRYPT_RSAPRIVATE_BLOB ) || !wcscmp( type, BCRYPT_RSAFULLPRIVATE_BLOB ))
     {
@@ -1797,9 +1824,6 @@ static NTSTATUS key_import_pair( struct algorithm *alg, const WCHAR *type, BCRYP
             key_destroy( key );
             return status;
         }
-
-        *ret_key = key;
-        return STATUS_SUCCESS;
     }
     else if (!wcscmp( type, LEGACY_RSAPRIVATE_BLOB ))
     {
@@ -1832,9 +1856,6 @@ static NTSTATUS key_import_pair( struct algorithm *alg, const WCHAR *type, BCRYP
             key_destroy( key );
             return status;
         }
-
-        *ret_key = key;
-        return STATUS_SUCCESS;
     }
     else if (!wcscmp( type, LEGACY_DSA_V2_PRIVATE_BLOB ))
     {
@@ -1872,9 +1893,6 @@ static NTSTATUS key_import_pair( struct algorithm *alg, const WCHAR *type, BCRYP
             key_destroy( key );
             return status;
         }
-
-        *ret_key = key;
-        return STATUS_SUCCESS;
     }
     else if (!wcscmp( type, LEGACY_DSA_V2_PUBLIC_BLOB )) /* not supported on native */
     {
@@ -1908,15 +1926,12 @@ static NTSTATUS key_import_pair( struct algorithm *alg, const WCHAR *type, BCRYP
             key_destroy( key );
             return status;
         }
-
-        *ret_key = key;
-        return STATUS_SUCCESS;
     }
     else if (!wcscmp( type, BCRYPT_DH_PRIVATE_BLOB ))
     {
         BCRYPT_DH_KEY_BLOB *dh_blob = (BCRYPT_DH_KEY_BLOB *)input;
 
-        if (input_len < sizeof(*dh_blob)) return STATUS_INVALID_PARAMETER;
+        if (input_len != sizeof(*dh_blob) + dh_blob->cbKey * 4) return STATUS_INVALID_PARAMETER;
         if (alg->id != ALG_ID_DH || dh_blob->dwMagic != BCRYPT_DH_PRIVATE_MAGIC)
             return STATUS_NOT_SUPPORTED;
 
@@ -1930,15 +1945,12 @@ static NTSTATUS key_import_pair( struct algorithm *alg, const WCHAR *type, BCRYP
             key_destroy( key );
             return status;
         }
-
-        *ret_key = key;
-        return STATUS_SUCCESS;
     }
     else if (!wcscmp( type, BCRYPT_DH_PUBLIC_BLOB ))
     {
         BCRYPT_DH_KEY_BLOB *dh_blob = (BCRYPT_DH_KEY_BLOB *)input;
 
-        if (input_len < sizeof(*dh_blob)) return STATUS_INVALID_PARAMETER;
+        if (input_len != sizeof(*dh_blob) + dh_blob->cbKey * 3) return STATUS_INVALID_PARAMETER;
         if (alg->id != ALG_ID_DH || dh_blob->dwMagic != BCRYPT_DH_PUBLIC_MAGIC)
             return STATUS_NOT_SUPPORTED;
 
@@ -1952,13 +1964,19 @@ static NTSTATUS key_import_pair( struct algorithm *alg, const WCHAR *type, BCRYP
             key_destroy( key );
             return status;
         }
-
-        *ret_key = key;
-        return STATUS_SUCCESS;
+    }
+    else
+    {
+        FIXME( "unsupported key type %s\n", debugstr_w(type) );
+        return STATUS_NOT_SUPPORTED;
     }
 
-    FIXME( "unsupported key type %s\n", debugstr_w(type) );
-    return STATUS_NOT_SUPPORTED;
+    if (!status)
+    {
+        key->u.a.flags |= KEY_FLAG_FINALIZED;
+        *ret_key = key;
+    }
+    return status;
 }
 
 NTSTATUS WINAPI BCryptGenerateSymmetricKey( BCRYPT_ALG_HANDLE handle, BCRYPT_KEY_HANDLE *ret_handle,
@@ -1999,11 +2017,14 @@ NTSTATUS WINAPI BCryptGenerateKeyPair( BCRYPT_ALG_HANDLE handle, BCRYPT_KEY_HAND
 NTSTATUS WINAPI BCryptFinalizeKeyPair( BCRYPT_KEY_HANDLE handle, ULONG flags )
 {
     struct key *key = get_key_object( handle );
+    NTSTATUS ret;
 
     TRACE( "%p, %#lx\n", key, flags );
 
-    if (!key) return STATUS_INVALID_HANDLE;
-    return UNIX_CALL( key_asymmetric_generate, key );
+    if (!key || key->u.a.flags & KEY_FLAG_FINALIZED) return STATUS_INVALID_HANDLE;
+
+    if (!(ret = UNIX_CALL( key_asymmetric_generate, key ))) key->u.a.flags |= KEY_FLAG_FINALIZED;
+    return ret;
 }
 
 NTSTATUS WINAPI BCryptImportKey( BCRYPT_ALG_HANDLE handle, BCRYPT_KEY_HANDLE decrypt_key, const WCHAR *type,
