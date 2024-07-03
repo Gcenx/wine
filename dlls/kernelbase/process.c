@@ -664,6 +664,9 @@ static const WCHAR *hack_append_command_line( const WCHAR *cmd, const WCHAR *cmd
     /* CROSSOVER HACK: bug 23061
      * Add `/devicetype DX12` to Anno 1800 to force DX12.
      */
+    /* CROSSOVER HACK: bug 23949
+     * Add --in-process-gpu to HYP.exe.
+     */
 
     static const struct
     {
@@ -688,6 +691,7 @@ static const WCHAR *hack_append_command_line( const WCHAR *cmd, const WCHAR *cmd
         {L"t2gp.exe", L" --no-sandbox --in-process-gpu --use-gl=swiftshader", NULL, L"--type=crashpad-handler"},
         {L"WXWorkWeb.exe", L" --in-process-gpu", NULL, L"--type=crashpad-handler"},
         {L"Anno1800.exe", L" /devicetype DX12", NULL, NULL},
+        {L"HYP.exe", L" --in-process-gpu", NULL, NULL},
     };
     unsigned int i;
 

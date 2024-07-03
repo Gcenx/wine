@@ -46,7 +46,7 @@ static CFMutableDictionaryRef win_datas;
 static unsigned int activate_on_focus_time;
 
 
-/* CrossOver Hack #16933 */
+/* CrossOver Hack #16933 and #23971 */
 static BOOL is_main_quicken_window(HWND hwnd)
 {
     static const WCHAR qw_exeW[] = {'q','w','.','e','x','e',0};
@@ -70,6 +70,23 @@ static BOOL is_main_quicken_window(HWND hwnd)
     return !wcscmp(class, qframeW);
 }
 
+static BOOL is_hoyoplay(void)
+{
+    static const WCHAR hoyoplayW[] = {'H','Y','P','.','e','x','e',0};
+    static int is_hoyoplay_exe = -1;
+    WCHAR *name, *module_exe;
+
+    if (is_hoyoplay_exe == -1)
+    {
+        name = NtCurrentTeb()->Peb->ProcessParameters->ImagePathName.Buffer;
+        module_exe = wcsrchr(name, '\\');
+        module_exe = module_exe ? module_exe + 1 : name;
+
+        is_hoyoplay_exe = !wcsicmp(module_exe, hoyoplayW);
+    }
+    return is_hoyoplay_exe;
+}
+
 /***********************************************************************
  *              get_cocoa_window_features
  */
@@ -88,7 +105,7 @@ static void get_cocoa_window_features(struct macdrv_win_data *data,
     if (EqualRect(window_rect, client_rect)) return;
 
     /* CrossOver Hack #16933 */
-    if (is_main_quicken_window(data->hwnd))
+    if (is_main_quicken_window(data->hwnd) || is_hoyoplay())
     {
         wf->resizable = TRUE;
         return;
