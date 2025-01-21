@@ -670,6 +670,9 @@ static const WCHAR *hack_append_command_line( const WCHAR *cmd, const WCHAR *cmd
     /* CROSSOVER HACK: bug 24098
      * Add --in-process-gpu --disable-gpu for NARAKA: BLADEPOINT.
      */
+    /* CROSSOVER HACK: bug 24279
+     * Add -nobattleye for GTA V.
+     */
 
     static const struct
     {
@@ -696,6 +699,7 @@ static const WCHAR *hack_append_command_line( const WCHAR *cmd, const WCHAR *cmd
         {L"Anno1800.exe", L" /devicetype DX12", NULL, NULL},
         {L"HYP.exe", L" --in-process-gpu", NULL, NULL},
         {L"LootHoarder.exe", L" --in-process-gpu --disable-gpu", NULL, NULL},
+        {L"PlayGTAV.exe", L" -nobattleye", NULL, NULL},
     };
     unsigned int i;
 
