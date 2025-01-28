@@ -613,7 +613,8 @@ static void add_ms_root_certs(HCERTSTORE to, HCERTSTORE cached)
         if ((existing = CertFindCertificateInStore(cached, X509_ASN_ENCODING, 0, CERT_FIND_EXISTING, cert, NULL)))
         {
             CertDeleteCertificateFromStore(existing);
-            CertFreeCertificateContext(existing);
+            if (!is_bnet())
+                CertFreeCertificateContext(existing);
         }
         CertFreeCertificateContext(cert);
     }

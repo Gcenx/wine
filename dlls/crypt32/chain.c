@@ -367,6 +367,7 @@ DWORD CRYPT_IsCertificateSelfSigned(const CERT_CONTEXT *cert)
     if (status)
         status |= CERT_TRUST_IS_SELF_SIGNED;
 
+    TRACE("status %#lx.\n", status);
     return status;
 }
 
