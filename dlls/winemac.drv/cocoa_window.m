@@ -2130,8 +2130,8 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
         [self makeKeyWindow];
         causing_becomeKeyWindow = nil;
 
-        [queue discardEventsMatchingMask:event_mask_for_type(WINDOW_GOT_FOCUS) |
-                                         event_mask_for_type(WINDOW_LOST_FOCUS)
+        /* CrossOver Hack #18896: don't discard WINDOW_GOT_FOCUS events */
+        [queue discardEventsMatchingMask:event_mask_for_type(WINDOW_LOST_FOCUS)
                                forWindow:self];
     }
 
@@ -2319,7 +2319,20 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
     - (BOOL) presentsVisibleContent
     {
         if (NSWidth(self.frame) > 0 && NSHeight(self.frame) > 0 && ![self isEmptyShaped])
+        {
+            /* CW HACK 24152 */
+            static dispatch_once_t once;
+            static BOOL isEpicGamesLauncher;
+            dispatch_once(&once, ^{
+                NSString *exeName = [NSRunningApplication currentApplication].executableURL.lastPathComponent;
+                isEpicGamesLauncher = [exeName isEqualToString:@"EpicGamesLauncher.exe"];
+            });
+
+            if (isEpicGamesLauncher && [self isExcludedFromWindowsMenu])
+                return NO;
+
             return YES;
+        }
 
         for (WineWindow *child in self.childWindows)
         {
@@ -2521,6 +2534,8 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
 
         if ([menuItem action] == @selector(makeKeyAndOrderFront:))
             ret = [self isKeyWindow] || (!self.disabled && !self.noForeground);
+        else if ([menuItem action] == @selector(undo:)) // CrossOver Hack 10912: Mac Edit menu
+            ret = TRUE;
         if ([menuItem action] == @selector(toggleFullScreen:) && (self.disabled || maximized))
             ret = NO;
 
@@ -2635,6 +2650,69 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
 
             [super sendEvent:event];
         }
+    }
+
+    // CrossOver Hack 10912: Mac Edit menu
+    - (void) sendEditMenuCommand:(int)command
+    {
+        macdrv_event* event;
+        NSTimeInterval now = [[NSProcessInfo processInfo] systemUptime];
+
+        if (mac_edit_menu == MAC_EDIT_MENU_DISABLED) // Shouldn't get here
+        {
+            ERR(@"The Mac Edit menu is supposed to be disabled\n");
+            NSBeep();
+            return;
+        }
+
+        event = macdrv_create_event(EDIT_MENU_COMMAND, self);
+        event->edit_menu_command.command = command;
+        event->edit_menu_command.time_ms = [[WineApplicationController sharedController] ticksForEventTime:now];
+
+        [queue postEvent:event];
+
+        macdrv_release_event(event);
+
+        // This is an even grosser hack than the rest of the support for the Edit
+        // menu.  We are deliberately leaving ourselves with an incorrect notion
+        // of the current modifier key state (for the case where the user used a
+        // Command-key shortcut to invoke an Edit menu item).  Both Wine and this
+        // class pretend that Command/Alt are not pressed so that, when the user
+        // actually releases the key, it doesn't put focus on the menu bar.  If
+        // the user keeps Command pressed and types another key, we'll think that
+        // Command was newly pressed and generate the appropriate event to get
+        // everybody back in sync.
+        lastModifierFlags &= ~(NX_COMMANDMASK | NX_DEVICELCMDKEYMASK | NX_DEVICERCMDKEYMASK);
+    }
+
+    - (void) copy:(id)sender
+    {
+        [self sendEditMenuCommand:EDIT_COMMAND_COPY];
+    }
+
+    - (void) cut:(id)sender
+    {
+        [self sendEditMenuCommand:EDIT_COMMAND_CUT];
+    }
+
+    - (void) delete:(id)sender
+    {
+        [self sendEditMenuCommand:EDIT_COMMAND_DELETE];
+    }
+
+    - (void) paste:(id)sender
+    {
+        [self sendEditMenuCommand:EDIT_COMMAND_PASTE];
+    }
+
+    - (void) selectAll:(id)sender
+    {
+        [self sendEditMenuCommand:EDIT_COMMAND_SELECT_ALL];
+    }
+
+    - (void) undo:(id)sender
+    {
+        [self sendEditMenuCommand:EDIT_COMMAND_UNDO];
     }
 
     - (void) miniaturize:(id)sender
@@ -2879,6 +2957,19 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
 
 
     /*
+     * ---------- NSObject method overrides ----------
+     */
+    // CrossOver Hack 10912: Mac Edit menu
+    - (BOOL) respondsToSelector:(SEL)selector
+    {
+        if (mac_edit_menu == MAC_EDIT_MENU_DISABLED && [[WineApplicationController sharedController] isEditMenuAction:selector])
+             return FALSE;
+
+        return [super respondsToSelector:selector];
+    }
+
+
+    /*
      * ---------- NSWindowDelegate methods ----------
      */
     - (NSSize) window:(NSWindow*)window willUseFullScreenContentSize:(NSSize)proposedSize
@@ -2907,7 +2998,7 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
         if (event)
             [self flagsChanged:event];
 
-        if (causing_becomeKeyWindow == self) return;
+        /* CrossOver Hack #18896: don't return here based on causing_becomeKeyWindow */
 
         [controller windowGotFocus:self];
     }
@@ -3018,6 +3109,7 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
         macdrv_event* event;
 
         if (causing_becomeKeyWindow) return;
+        if ([[WineApplicationController sharedController] temporarilyIgnoreResignEventsForDialog]) return;
 
         event = macdrv_create_event(WINDOW_LOST_FOCUS, self);
         [queue postEvent:event];

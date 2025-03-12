@@ -360,6 +360,7 @@ HKLM,System\CurrentControlSet\Control\Class\{745a17a0-74d3-11d0-b6fe-00a0c90f57d
 
 [CurrentVersion]
 HKCU,%CurrentVersion%\Explorer\Advanced,,16
+HKCU,%CurrentVersion%\Explorer\FileExts,,16
 HKCU,%CurrentVersion%\Run,,16
 HKCU,%CurrentVersionNT%\Winlogon,,16
 HKLM,%CurrentVersion%,"CommonFilesDir",,"%16427%"
@@ -2515,7 +2516,7 @@ StartType=3
 ErrorControl=1
 
 [Services]
-HKLM,%CurrentVersion%\RunServices,"winemenubuilder",2,"%11%\winemenubuilder.exe -a -r"
+;(cw)HKLM,%CurrentVersion%\RunServices,"winemenubuilder",2,"%11%\winemenubuilder.exe -a -r"
 HKLM,"System\CurrentControlSet\Services\Eventlog\Application",,16
 HKLM,"System\CurrentControlSet\Services\Eventlog\System","Sources",0x10000,""
 HKLM,"System\CurrentControlSet\Services\Tcpip\Parameters","DataBasePath",,"%12%\etc"

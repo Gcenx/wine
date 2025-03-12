@@ -2046,11 +2046,24 @@ static BOOL apply_window_pos( HWND hwnd, HWND insert_after, UINT swp_flags, stru
     struct window_rects monitor_rects;
     WND *win;
     HWND owner_hint, surface_win = 0, parent = NtUserGetAncestor( hwnd, GA_PARENT );
-    BOOL ret, is_fullscreen, is_layered, is_child;
+    BOOL ret, is_fullscreen, is_layered, is_child, dummy_shm_surface = FALSE;
     struct window_rects old_rects;
     RECT extra_rects[3];
     struct window_surface *old_surface;
     UINT raw_dpi, monitor_dpi;
+
+    /* CX HACK 23950: provide a default shm surface for windows with parents in other process */
+    if (!(swp_flags & SWP_HIDEWINDOW))
+    {
+        win = get_win_ptr( parent );
+        if (win == OBJ_OTHER_PROCESS)
+        {
+            new_surface = &dummy_surface;
+            window_surface_add_ref( new_surface );
+            dummy_shm_surface = TRUE;
+        }
+        else if (win && win != WND_DESKTOP) release_win_ptr( win );
+    }
 
     is_layered = new_surface && new_surface->alpha_mask;
     is_fullscreen = is_window_rect_full_screen( &new_rects->visible, get_thread_dpi() );
@@ -2064,6 +2077,14 @@ static BOOL apply_window_pos( HWND hwnd, HWND insert_after, UINT swp_flags, stru
 
     if (!(win = get_win_ptr( hwnd )) || win == WND_DESKTOP || win == WND_OTHER_PROCESS) return FALSE;
     old_surface = win->surface;
+
+    /* CX HACK 23950 */
+    if (dummy_shm_surface && new_surface == &dummy_surface)
+    {
+        window_surface_release( new_surface );
+        new_surface = create_shm_surface( hwnd, parent, &new_rects->visible, old_surface );
+    }
+
     if (old_surface != new_surface) swp_flags |= SWP_FRAMECHANGED;  /* force refreshing non-client area */
 
     if (new_surface == &dummy_surface) swp_flags |= SWP_NOREDRAW;
@@ -2478,6 +2499,26 @@ BOOL WINAPI NtUserUpdateLayeredWindow( HWND hwnd, HDC hdc_dst, const POINT *pts_
     surface = get_window_surface( hwnd, swp_flags, TRUE, &new_rects, &surface_rect );
     apply_window_pos( hwnd, 0, swp_flags, surface, &new_rects, NULL );
     if (!surface) return FALSE;
+
+    /*
+     * CrossOver hack:
+     * Hide non-working, semi-transparent window in Quicken 2012.
+     * for bug 8982.
+     */
+    if(1)
+    {
+        static const WCHAR QWinLightbox[] = {'Q','W','i','n','L','i','g','h','t','b','o','x',0};
+        WCHAR buffer[sizeof(QWinLightbox) / sizeof(WCHAR)];
+        UNICODE_STRING name = { .Buffer = buffer, .MaximumLength = sizeof(QWinLightbox) };
+
+        if (NtUserGetClassName( hwnd, FALSE, &name )
+                && !memcmp( QWinLightbox, buffer, sizeof(QWinLightbox) ))
+        {
+            FIXME( "Hide semi-transparent window that is created over application window.\n" );
+            NtUserSetWindowPos( hwnd, HWND_BOTTOM, 0, 0, 0, 0,
+                                SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW | SWP_NOSENDCHANGING );
+        }
+    }
 
     if (!hdc_src || surface == &dummy_surface) ret = TRUE;
     else

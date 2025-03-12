@@ -399,6 +399,10 @@ static char **expand_mac_font(const char *path)
         unsigned int size, max_size;
     } ret;
 
+    /* CrossOver HACK #15526.  High Sierra can block when using the FSRef api, so ignore
+       suitcase fonts. */
+    return NULL;
+
     TRACE("path %s\n", path);
 
     s = FSPathMakeRef((unsigned char*)path, &ref, FALSE);
@@ -1285,6 +1289,31 @@ static struct unix_face *unix_face_create( const char *unix_name, void *data_ptr
         This = NULL;
     }
 
+    /* CROSSOVER HACK - bug 4862 */
+    {
+        static const WCHAR zenkaiW[] = {'A','R',' ','P','L',' ','Z','e','n','K','a','i',' ','U','n','i',0};
+        static const WCHAR samyakW[] = {'S','a','m','y','a','k',' ','O','r','i','y','a',0};
+        static const WCHAR symbolW[] = {'s','y','m','b','o','l',0};
+        if (This && (!wcscmp(This->family_name, zenkaiW) || !wcscmp(This->family_name, samyakW)))
+        {
+            /* These fonts (ukai.ttf, samyak-oriya.ttf) cause native gdiplus to crash */
+            TRACE("Skipping %s\n", debugstr_w(This->family_name));
+            free( This );
+            This = NULL;
+        }
+        /* Ignore Apple's Symbol font */
+        if (This && !wcsicmp( This->family_name, symbolW ) && This->scalable)
+        {
+            if(!(This->fs.fsCsb[0] & 0x80000000))
+            {
+                TRACE( "Skipping Apple's Symbol font\n" );
+                free( This );
+                This = NULL;
+                goto done;
+            }
+        }
+    }
+
 done:
     if (unix_name) munmap( data_ptr, data_size );
     return This;
@@ -1798,7 +1827,16 @@ static void load_mac_fonts(void)
 
 static BOOL init_freetype(void)
 {
-    ft_handle = dlopen(SONAME_LIBFREETYPE, RTLD_NOW);
+    const char *ftname = "libcxfreetype.so";
+
+    TRACE("Trying freetype library %s (hard-coded)\n",ftname);
+    ft_handle = dlopen(ftname, RTLD_NOW);
+
+    if(!ft_handle) {
+        TRACE("Can't find freetype library %s, trying %s instead\n", ftname, SONAME_LIBFREETYPE);
+        ft_handle = dlopen(SONAME_LIBFREETYPE, RTLD_NOW);
+    }
+
     if(!ft_handle) {
         WINE_MESSAGE(
       "Wine cannot find the FreeType font library.  To enable Wine to\n"
@@ -3525,6 +3563,38 @@ static UINT freetype_get_glyph_outline( struct gdi_font *font, UINT glyph, UINT 
     case GGO_GRAY4_BITMAP:
     case GGO_GRAY8_BITMAP:
     case WINE_GGO_GRAY16_BITMAP:
+
+        /****************** CodeWeavers hack to fix HL2 crash **************************
+         *
+         * Both glyphs 0x2e and 0x39 of this font get rendered to a larger
+         * size with FreeType than under Windows, and HL2 uses a fixed size
+         * buffer on the stack to copy the data into.  For now we'll clip glyphs
+         * from that font into a rather smaller BBox
+         *
+         ******************************************************************************/
+        if ((ft_face->family_name != NULL) &&
+           (!strcmp(ft_face->family_name, "HL2MP") ||
+            !strcmp(ft_face->family_name, "csd")))
+        {
+            int i;
+            DWORD width  = (bbox.xMax - bbox.xMin ) >> 6;
+            DWORD height = (bbox.yMax - bbox.yMin ) >> 6;
+
+            if(width) width--;
+
+            for(i = 0; i < 2; i++)
+            {
+                if(height)
+                {
+                    height--;
+                    lpgm->gmptGlyphOrigin.y--;
+                }
+            }
+            lpgm->gmBlackBoxX = width  ? width  : 1;
+            lpgm->gmBlackBoxY = height ? height : 1;
+        }
+        /*********************************** End CW's hack ****************************/
+
         return get_antialias_glyph_bitmap( ft_face->glyph, bbox, format, font->fake_bold,
                                            matrices, buflen, buf );
 

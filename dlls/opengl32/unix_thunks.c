@@ -892,7 +892,7 @@ static NTSTATUS gl_glGetDoublev( void *args )
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS gl_glGetError( void *args )
+NTSTATUS gl_glGetError( void *args )
 {
     struct glGetError_params *params = args;
     const struct opengl_funcs *funcs = params->teb->glTable;
@@ -27317,27 +27317,6 @@ static NTSTATUS wow64_wgl_wglSetPixelFormat( void *args )
     return status;
 }
 
-static NTSTATUS wow64_wgl_wglShareLists( void *args )
-{
-    struct
-    {
-        PTR32 teb;
-        PTR32 hrcSrvShare;
-        PTR32 hrcSrvSource;
-        BOOL ret;
-    } *params32 = args;
-    struct wglShareLists_params params =
-    {
-        .teb = get_teb64(params32->teb),
-        .hrcSrvShare = ULongToPtr(params32->hrcSrvShare),
-        .hrcSrvSource = ULongToPtr(params32->hrcSrvSource),
-    };
-    NTSTATUS status;
-    status = wgl_wglShareLists( &params );
-    params32->ret = params.ret;
-    return status;
-}
-
 static NTSTATUS wow64_wgl_wglSwapBuffers( void *args )
 {
     struct
@@ -29352,23 +29331,6 @@ static NTSTATUS wow64_gl_glGetDoublev( void *args )
     };
     NTSTATUS status;
     status = gl_glGetDoublev( &params );
-    return status;
-}
-
-static NTSTATUS wow64_gl_glGetError( void *args )
-{
-    struct
-    {
-        PTR32 teb;
-        GLenum ret;
-    } *params32 = args;
-    struct glGetError_params params =
-    {
-        .teb = get_teb64(params32->teb),
-    };
-    NTSTATUS status;
-    status = gl_glGetError( &params );
-    params32->ret = params.ret;
     return status;
 }
 
@@ -92261,6 +92223,8 @@ extern NTSTATUS wow64_wgl_wglCreateContext( void *args );
 extern NTSTATUS wow64_wgl_wglDeleteContext( void *args );
 extern NTSTATUS wow64_wgl_wglGetProcAddress( void *args );
 extern NTSTATUS wow64_wgl_wglMakeCurrent( void *args );
+extern NTSTATUS wow64_wgl_wglShareLists( void *args );
+extern NTSTATUS wow64_gl_glGetError( void *args );
 extern NTSTATUS wow64_gl_glGetString( void *args );
 extern NTSTATUS wow64_ext_glClientWaitSync( void *args );
 extern NTSTATUS wow64_ext_glDeleteSync( void *args );

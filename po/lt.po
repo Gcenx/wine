@@ -530,7 +530,7 @@ msgstr "Rodyti išsamiau"
 
 #: dlls/comctl32/comctl32.rc:31 dlls/cryptui/cryptui.rc:235
 #: programs/regedit/regedit.rc:291 programs/taskmgr/taskmgr.rc:434
-#: programs/winedbg/winedbg.rc:61 programs/winedbg/winedbg.rc:76
+#: programs/winedbg/winedbg.rc:59 programs/winedbg/winedbg.rc:71
 #: programs/wordpad/wordpad.rc:180
 msgid "Close"
 msgstr "Užverti"
@@ -8150,7 +8150,7 @@ msgstr "Visas tinklas"
 msgid "Sound Selection"
 msgstr "Garso parinkimas"
 
-#: dlls/msacm32/msacm32.rc:39 programs/winedbg/winedbg.rc:77
+#: dlls/msacm32/msacm32.rc:39 programs/winedbg/winedbg.rc:72
 msgid "&Save As..."
 msgstr "Išsaugoti k&aip..."
 
@@ -18996,35 +18996,49 @@ msgstr ""
 "Programa %s susidūrė su rimta problema ir turi būti uždaryta. Atsiprašome "
 "dėl nepatogumų."
 
-#: programs/winedbg/winedbg.rc:59
+#: programs/winedbg/winedbg.rc:57
+#, fuzzy
+#| msgid ""
+#| "This can be caused by a problem in the program or a deficiency in Wine. "
+#| "You may want to check <a href=\"http://www.codeweavers.com/compatibility/"
+#| "\">http://www.codeweavers.com/compatibility/</a> for tips about running "
+#| "this application."
 msgid ""
 "This can be caused by a problem in the program or a deficiency in Wine. You "
-"may want to check the <a href=\"https://appdb.winehq.org\">Application "
-"Database</a> for tips about running this application."
+"may want to check <a href=\"https://www.codeweavers.com/compatibility/"
+"\">https://www.codeweavers.com/compatibility/</a> for tips about running "
+"this application."
 msgstr ""
-"Programos problemos ar „Wine“ trūkumai gali būti to priežastimi. Turbūt "
-"norėsite patikrinti <a href=\"https://appdb.winehq.org\">programų duomenų "
-"bazę</a> dėl patarimų šios programos vykdymui."
+"Programos problemos ar Wine trūkumai gali būti to priežastimi. Jūs turbūt "
+"norėsite patikrinti <a href=\"http://www.codeweavers.com/compatibility/"
+"\">http://www.codeweavers.com/compatibility/</a> dėl patarimų apie šios "
+"programos vykdymą."
 
-#: programs/winedbg/winedbg.rc:62
+#: programs/winedbg/winedbg.rc:60
 msgid "Show &Details"
 msgstr "Rodyti &išsamiau"
 
-#: programs/winedbg/winedbg.rc:67
+#: programs/winedbg/winedbg.rc:65
 msgid "Program Error Details"
 msgstr "Išsamiau apie programos klaidą"
 
-#: programs/winedbg/winedbg.rc:74
+#: programs/winedbg/winedbg.rc:69
+#, fuzzy
+#| msgid ""
+#| "If this problem is not present under Windows and has not been reported "
+#| "yet, you can save the detailed information to a file using the \"Save As"
+#| "\" button, then <a href=\"http://www.codeweavers.com/support/tickets/"
+#| "enter/\">file a bug report</a> and attach that file to the report."
 msgid ""
 "If this problem is not present under Windows and has not been reported yet, "
 "you can save the detailed information to a file using the \"Save As\" "
-"button, then <a href=\"https://gitlab.winehq.org/wine/wine/-/wikis/"
-"Bugs\">file a bug report</a> and attach that file to the report."
+"button, then <a href=\"https://www.codeweavers.com/support/tickets/enter/"
+"\">file a bug report</a> and attach that file to the report."
 msgstr ""
 "Jei šios problemos nėra „Windows“ sistemoje ir apie ją dar nebuvo pranešta, "
 "galite išsaugoti išsamią informaciją į failą naudodami mygtuką „Išsaugoti "
-"kaip“, tada <a href=\"https://gitlab.winehq.org/wine/wine/-/wikis/"
-"Bugs\">užregistruoti klaidą</a> ir prikabinti tą failą prie pranešimo."
+"kaip“, tada <a href=\"http://www.codeweavers.com/support/tickets/enter/"
+"\">užregistruoti klaidą</a> ir prikabinti tą failą prie pranešimo."
 
 #: programs/winedbg/winedbg.rc:40
 msgid ""

@@ -537,7 +537,7 @@ msgstr "Obejrzyj szczegóły"
 
 #: dlls/comctl32/comctl32.rc:31 dlls/cryptui/cryptui.rc:235
 #: programs/regedit/regedit.rc:291 programs/taskmgr/taskmgr.rc:434
-#: programs/winedbg/winedbg.rc:61 programs/winedbg/winedbg.rc:76
+#: programs/winedbg/winedbg.rc:59 programs/winedbg/winedbg.rc:71
 #: programs/wordpad/wordpad.rc:180
 msgid "Close"
 msgstr "Zamknij"
@@ -8185,7 +8185,7 @@ msgstr "Cała sieć"
 msgid "Sound Selection"
 msgstr "Wybór dźwięku"
 
-#: dlls/msacm32/msacm32.rc:39 programs/winedbg/winedbg.rc:77
+#: dlls/msacm32/msacm32.rc:39 programs/winedbg/winedbg.rc:72
 msgid "&Save As..."
 msgstr "&Zapisz jako..."
 
@@ -19061,35 +19061,48 @@ msgstr ""
 "Program %s napotkał poważny problem i musi zakończyć działanie. Przepraszamy "
 "za tę niedogodność."
 
-#: programs/winedbg/winedbg.rc:59
+#: programs/winedbg/winedbg.rc:57
+#, fuzzy
+#| msgid ""
+#| "This can be caused by a problem in the program or a deficiency in Wine. "
+#| "You may want to check <a href=\"http://www.codeweavers.com/compatibility/"
+#| "\">http://www.codeweavers.com/compatibility/</a> for tips about running "
+#| "this application."
 msgid ""
 "This can be caused by a problem in the program or a deficiency in Wine. You "
-"may want to check the <a href=\"https://appdb.winehq.org\">Application "
-"Database</a> for tips about running this application."
+"may want to check <a href=\"https://www.codeweavers.com/compatibility/"
+"\">https://www.codeweavers.com/compatibility/</a> for tips about running "
+"this application."
 msgstr ""
 "Powodem błędu może być problem w programie lub braki w Wine. Zajrzyj do <a "
-"href=\"https://appdb.winehq.org\">Bazy danych aplikacji</a> po wskazówki na "
-"temat uruchomienia tej aplikacji."
+"href=\"http://www.codeweavers.com/compatibility/\">http://www.codeweavers."
+"com/compatibility/</a> po wskazówki na temat uruchomienia tej aplikacji."
 
-#: programs/winedbg/winedbg.rc:62
+#: programs/winedbg/winedbg.rc:60
 msgid "Show &Details"
 msgstr "Pokaż &szczegóły"
 
-#: programs/winedbg/winedbg.rc:67
+#: programs/winedbg/winedbg.rc:65
 msgid "Program Error Details"
 msgstr "Szczegóły błędu programu"
 
-#: programs/winedbg/winedbg.rc:74
+#: programs/winedbg/winedbg.rc:69
+#, fuzzy
+#| msgid ""
+#| "If this problem is not present under Windows and has not been reported "
+#| "yet, you can save the detailed information to a file using the \"Save As"
+#| "\" button, then <a href=\"http://www.codeweavers.com/support/tickets/"
+#| "enter/\">file a bug report</a> and attach that file to the report."
 msgid ""
 "If this problem is not present under Windows and has not been reported yet, "
 "you can save the detailed information to a file using the \"Save As\" "
-"button, then <a href=\"https://gitlab.winehq.org/wine/wine/-/wikis/"
-"Bugs\">file a bug report</a> and attach that file to the report."
+"button, then <a href=\"https://www.codeweavers.com/support/tickets/enter/"
+"\">file a bug report</a> and attach that file to the report."
 msgstr ""
 "Jeżeli problem ten nie występuje w systemie Windows i nie został jeszcze "
 "zgłoszony, to możesz zapisać szczegółowe informacje do pliku używając "
-"przycisku \"Zapisz jako\", a następnie <a href=\"https://gitlab.winehq.org/"
-"wine/wine/-/wikis/Bugs\">wypełnić zgłoszenie o błędzie</a> i dołączyć ten "
+"przycisku \"Zapisz jako\", a następnie <a href=\"http://www.codeweavers.com/"
+"support/tickets/enter/\">wypełnić zgłoszenie o błędzie</a> i dołączyć ten "
 "plik do zgłoszenia."
 
 #: programs/winedbg/winedbg.rc:40

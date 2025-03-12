@@ -180,7 +180,9 @@ static const struct object_ops pipe_server_ops =
     pipe_server_open_file,        /* open_file */
     no_kernel_obj_list,           /* get_kernel_obj_list */
     async_close_obj_handle,       /* close_handle */
-    pipe_server_destroy           /* destroy */
+    pipe_server_destroy,          /* destroy */
+    default_fd_get_esync_fd,      /* get_esync_fd */
+    default_fd_get_msync_idx,     /* get_msync_idx */
 };
 
 static const struct fd_ops pipe_server_fd_ops =
@@ -224,7 +226,9 @@ static const struct object_ops pipe_client_ops =
     no_open_file,                 /* open_file */
     no_kernel_obj_list,           /* get_kernel_obj_list */
     async_close_obj_handle,       /* close_handle */
-    pipe_end_destroy              /* destroy */
+    pipe_end_destroy,             /* destroy */
+    default_fd_get_esync_fd,      /* get_esync_fd */
+    default_fd_get_msync_idx,     /* get_msync_idx */
 };
 
 static const struct fd_ops pipe_client_fd_ops =

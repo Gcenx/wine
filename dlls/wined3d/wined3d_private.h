@@ -237,6 +237,7 @@ struct wined3d_d3d_info
     uint32_t clip_control : 1;
     uint32_t full_ffp_varyings : 1;
     uint32_t scaled_resolve : 1;
+    uint32_t multithread_safe : 1;
     uint32_t pbo : 1;
     uint32_t subpixel_viewport : 1;
     uint32_t fences : 1;
@@ -477,6 +478,7 @@ struct wined3d_settings
     unsigned int multisample_textures;
     unsigned int sample_count;
     unsigned int strict_shader_math;
+    unsigned int multiply_special;
     unsigned int max_sm_vs;
     unsigned int max_sm_hs;
     unsigned int max_sm_ds;
@@ -491,6 +493,13 @@ struct wined3d_settings
 };
 
 extern struct wined3d_settings wined3d_settings;
+
+struct cxgames_hacks
+{
+    BOOL safe_vs_consts;
+};
+
+extern struct cxgames_hacks cxgames_hacks;
 
 enum wined3d_shader_resource_type
 {

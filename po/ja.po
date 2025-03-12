@@ -531,7 +531,7 @@ msgstr "詳細を見る"
 
 #: dlls/comctl32/comctl32.rc:31 dlls/cryptui/cryptui.rc:235
 #: programs/regedit/regedit.rc:291 programs/taskmgr/taskmgr.rc:434
-#: programs/winedbg/winedbg.rc:61 programs/winedbg/winedbg.rc:76
+#: programs/winedbg/winedbg.rc:59 programs/winedbg/winedbg.rc:71
 #: programs/wordpad/wordpad.rc:180
 msgid "Close"
 msgstr "閉じる"
@@ -8139,7 +8139,7 @@ msgstr "ネットワーク全体"
 msgid "Sound Selection"
 msgstr "サウンドの選択"
 
-#: dlls/msacm32/msacm32.rc:39 programs/winedbg/winedbg.rc:77
+#: dlls/msacm32/msacm32.rc:39 programs/winedbg/winedbg.rc:72
 msgid "&Save As..."
 msgstr "名前を付けて保存(&S)..."
 
@@ -18968,34 +18968,49 @@ msgstr ""
 "プログラム %s で重大な問題が発生したため、終了する必要があります。 ご不便をお"
 "かけし申し訳ありません。"
 
-#: programs/winedbg/winedbg.rc:59
+#: programs/winedbg/winedbg.rc:57
+#, fuzzy
+#| msgid ""
+#| "This can be caused by a problem in the program or a deficiency in Wine. "
+#| "You may want to check <a href=\"http://www.codeweavers.com/compatibility/"
+#| "\">http://www.codeweavers.com/compatibility/</a> for tips about running "
+#| "this application."
 msgid ""
 "This can be caused by a problem in the program or a deficiency in Wine. You "
-"may want to check the <a href=\"https://appdb.winehq.org\">Application "
-"Database</a> for tips about running this application."
+"may want to check <a href=\"https://www.codeweavers.com/compatibility/"
+"\">https://www.codeweavers.com/compatibility/</a> for tips about running "
+"this application."
 msgstr ""
 "これはプログラム内の問題や Wine の欠陥によって発生することがあります。<a "
-"href=\"https://appdb.winehq.org\">アプリケーション データベース</a>で このア"
-"プリケーションを動作させるヒントを 確認するとよいでしょう。"
+"href=\"http://www.codeweavers.com/compatibility/\">http://www.codeweavers."
+"com/compatibility/</a>で このアプリケーションを動作させるヒントを 確認すると"
+"よいでしょう。"
 
-#: programs/winedbg/winedbg.rc:62
+#: programs/winedbg/winedbg.rc:60
 msgid "Show &Details"
 msgstr "詳細を表示(&D)"
 
-#: programs/winedbg/winedbg.rc:67
+#: programs/winedbg/winedbg.rc:65
 msgid "Program Error Details"
 msgstr "プログラム エラーの詳細"
 
-#: programs/winedbg/winedbg.rc:74
+#: programs/winedbg/winedbg.rc:69
+#, fuzzy
+#| msgid ""
+#| "If this problem is not present under Windows and has not been reported "
+#| "yet, you can save the detailed information to a file using the \"Save As"
+#| "\" button, then <a href=\"http://www.codeweavers.com/support/tickets/"
+#| "enter/\">file a bug report</a> and attach that file to the report."
 msgid ""
 "If this problem is not present under Windows and has not been reported yet, "
 "you can save the detailed information to a file using the \"Save As\" "
-"button, then <a href=\"https://gitlab.winehq.org/wine/wine/-/wikis/"
-"Bugs\">file a bug report</a> and attach that file to the report."
+"button, then <a href=\"https://www.codeweavers.com/support/tickets/enter/"
+"\">file a bug report</a> and attach that file to the report."
 msgstr ""
 "この問題が Windows 上で発生することがなくまだ報告されていない場合は、[保存す"
-"る]ボタンを利用して詳細情報を保存した上で、 <a href=\"https://wiki.winehq."
-"org/Bugs\">バグ レポートを作成</a>し、そのファイルをレポートに添付できます。"
+"る]ボタンを利用して詳細情報を保存した上で、 <a href=\"http://www.codeweavers."
+"com/support/tickets/enter/\">バグ レポートを作成</a>し、そのファイルをレポー"
+"トに添付できます。"
 
 #: programs/winedbg/winedbg.rc:40
 msgid ""

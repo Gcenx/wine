@@ -2306,6 +2306,16 @@ BOOL SYSCALL_API __wine_get_icm_profile( HDC hdc, BOOL allow_default, DWORD *siz
     SYSCALL_FUNC( __wine_get_icm_profile );
 }
 
+NTSTATUS SYSCALL_API __wine_get_current_process_explicit_app_user_model_id( WCHAR *buffer, INT size )
+{
+    SYSCALL_FUNC( __wine_get_current_process_explicit_app_user_model_id );
+}
+
+NTSTATUS SYSCALL_API __wine_set_current_process_explicit_app_user_model_id( const WCHAR *aumid )
+{
+    SYSCALL_FUNC( __wine_set_current_process_explicit_app_user_model_id );
+}
+
 #else /*  __arm64ec__ */
 
 #ifdef _WIN64

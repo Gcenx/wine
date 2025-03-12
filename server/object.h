@@ -107,6 +107,10 @@ struct object_ops
     int (*close_handle)(struct object *,struct process *,obj_handle_t);
     /* destroy on refcount == 0 */
     void (*destroy)(struct object *);
+    /* return the esync fd for this object */
+    struct esync_fd *(*get_esync_fd)(struct object *, enum esync_type *type);
+    /* return the msync shm idx for this object */
+    unsigned int (*get_msync_idx)(struct object *, enum msync_type *type);
 };
 
 struct object
@@ -247,6 +251,7 @@ extern void generate_startup_debug_events( struct process *process );
 extern unsigned int supported_machines_count;
 extern unsigned short supported_machines[8];
 extern unsigned short native_machine;
+extern int wow64_using_32bit_prefix;
 extern void init_registry(void);
 extern void flush_registry(void);
 

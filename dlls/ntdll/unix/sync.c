@@ -66,6 +66,8 @@
 #include "wine/server.h"
 #include "wine/debug.h"
 #include "unix_private.h"
+#include "esync.h"
+#include "msync.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(sync);
 
@@ -304,8 +306,8 @@ static unsigned int validate_open_object_attributes( const OBJECT_ATTRIBUTES *at
 /******************************************************************************
  *              NtCreateSemaphore (NTDLL.@)
  */
-NTSTATUS WINAPI NtCreateSemaphore( HANDLE *handle, ACCESS_MASK access, const OBJECT_ATTRIBUTES *attr,
-                                   LONG initial, LONG max )
+NTSTATUS WINAPI GPT_IMPORT(NtCreateSemaphore)( HANDLE *handle, ACCESS_MASK access, const OBJECT_ATTRIBUTES *attr,
+                                               LONG initial, LONG max )
 {
     unsigned int ret;
     data_size_t len;
@@ -314,6 +316,12 @@ NTSTATUS WINAPI NtCreateSemaphore( HANDLE *handle, ACCESS_MASK access, const OBJ
     *handle = 0;
     if (max <= 0 || initial < 0 || initial > max) return STATUS_INVALID_PARAMETER;
     if ((ret = alloc_object_attributes( attr, &objattr, &len ))) return ret;
+
+    if (do_msync())
+        return msync_create_semaphore( handle, access, attr, initial, max );
+
+    if (do_esync())
+        return esync_create_semaphore( handle, access, attr, initial, max );
 
     SERVER_START_REQ( create_semaphore )
     {
@@ -330,6 +338,18 @@ NTSTATUS WINAPI NtCreateSemaphore( HANDLE *handle, ACCESS_MASK access, const OBJ
     return ret;
 }
 
+/* CW Hack 23015 */
+#if defined(__APPLE__) && defined(__x86_64__)
+
+NTSTATUS __attribute__((ms_abi)) msthunk_NtCreateSemaphore( HANDLE *handle, ACCESS_MASK access, const OBJECT_ATTRIBUTES *attr,
+                                                            LONG initial, LONG max )
+{
+    return sysv_NtCreateSemaphore( handle, access, attr, initial, max );
+}
+
+GPT_ABI_WRAPPER( NtCreateSemaphore );
+
+#endif
 
 /******************************************************************************
  *              NtOpenSemaphore (NTDLL.@)
@@ -339,6 +359,13 @@ NTSTATUS WINAPI NtOpenSemaphore( HANDLE *handle, ACCESS_MASK access, const OBJEC
     unsigned int ret;
 
     *handle = 0;
+
+    if (do_msync())
+        return msync_open_semaphore( handle, access, attr );
+
+    if (do_esync())
+        return esync_open_semaphore( handle, access, attr );
+
     if ((ret = validate_open_object_attributes( attr ))) return ret;
 
     SERVER_START_REQ( open_semaphore )
@@ -375,6 +402,12 @@ NTSTATUS WINAPI NtQuerySemaphore( HANDLE handle, SEMAPHORE_INFORMATION_CLASS cla
 
     if (len != sizeof(SEMAPHORE_BASIC_INFORMATION)) return STATUS_INFO_LENGTH_MISMATCH;
 
+    if (do_msync())
+        return msync_query_semaphore( handle, info, ret_len );
+
+    if (do_esync())
+        return esync_query_semaphore( handle, info, ret_len );
+
     SERVER_START_REQ( query_semaphore )
     {
         req->handle = wine_server_obj_handle( handle );
@@ -393,9 +426,15 @@ NTSTATUS WINAPI NtQuerySemaphore( HANDLE handle, SEMAPHORE_INFORMATION_CLASS cla
 /******************************************************************************
  *              NtReleaseSemaphore (NTDLL.@)
  */
-NTSTATUS WINAPI NtReleaseSemaphore( HANDLE handle, ULONG count, ULONG *previous )
+NTSTATUS WINAPI GPT_IMPORT(NtReleaseSemaphore)( HANDLE handle, ULONG count, ULONG *previous )
 {
     unsigned int ret;
+
+    if (do_msync())
+        return msync_release_semaphore( handle, count, previous );
+
+    if (do_esync())
+        return esync_release_semaphore( handle, count, previous );
 
     SERVER_START_REQ( release_semaphore )
     {
@@ -410,12 +449,23 @@ NTSTATUS WINAPI NtReleaseSemaphore( HANDLE handle, ULONG count, ULONG *previous 
     return ret;
 }
 
+/* CW Hack 23015 */
+#if defined(__APPLE__) && defined(__x86_64__)
+
+NTSTATUS __attribute__((ms_abi)) msthunk_NtReleaseSemaphore( HANDLE handle, ULONG count, ULONG *previous )
+{
+    return sysv_NtReleaseSemaphore( handle, count, previous );
+}
+
+GPT_ABI_WRAPPER( NtReleaseSemaphore );
+
+#endif
 
 /**************************************************************************
  *              NtCreateEvent (NTDLL.@)
  */
-NTSTATUS WINAPI NtCreateEvent( HANDLE *handle, ACCESS_MASK access, const OBJECT_ATTRIBUTES *attr,
-                               EVENT_TYPE type, BOOLEAN state )
+NTSTATUS WINAPI GPT_IMPORT(NtCreateEvent)( HANDLE *handle, ACCESS_MASK access, const OBJECT_ATTRIBUTES *attr,
+                                           EVENT_TYPE type, BOOLEAN state )
 {
     unsigned int ret;
     data_size_t len;
@@ -423,6 +473,13 @@ NTSTATUS WINAPI NtCreateEvent( HANDLE *handle, ACCESS_MASK access, const OBJECT_
 
     *handle = 0;
     if (type != NotificationEvent && type != SynchronizationEvent) return STATUS_INVALID_PARAMETER;
+
+    if (do_msync())
+        return msync_create_event( handle, access, attr, type, state );
+
+    if (do_esync())
+        return esync_create_event( handle, access, attr, type, state );
+
     if ((ret = alloc_object_attributes( attr, &objattr, &len ))) return ret;
 
     SERVER_START_REQ( create_event )
@@ -440,6 +497,18 @@ NTSTATUS WINAPI NtCreateEvent( HANDLE *handle, ACCESS_MASK access, const OBJECT_
     return ret;
 }
 
+/* CW Hack 23015 */
+#if defined(__APPLE__) && defined(__x86_64__)
+
+NTSTATUS __attribute__((ms_abi)) msthunk_NtCreateEvent( HANDLE *handle, ACCESS_MASK access, const OBJECT_ATTRIBUTES *attr,
+                                                        EVENT_TYPE type, BOOLEAN state )
+{
+    return sysv_NtCreateEvent( handle, access, attr, type, state );
+}
+
+GPT_ABI_WRAPPER( NtCreateEvent );
+
+#endif
 
 /******************************************************************************
  *              NtOpenEvent (NTDLL.@)
@@ -450,6 +519,12 @@ NTSTATUS WINAPI NtOpenEvent( HANDLE *handle, ACCESS_MASK access, const OBJECT_AT
 
     *handle = 0;
     if ((ret = validate_open_object_attributes( attr ))) return ret;
+
+    if (do_msync())
+        return msync_open_event( handle, access, attr );
+
+    if (do_esync())
+        return esync_open_event( handle, access, attr );
 
     SERVER_START_REQ( open_event )
     {
@@ -469,9 +544,16 @@ NTSTATUS WINAPI NtOpenEvent( HANDLE *handle, ACCESS_MASK access, const OBJECT_AT
 /******************************************************************************
  *              NtSetEvent (NTDLL.@)
  */
-NTSTATUS WINAPI NtSetEvent( HANDLE handle, LONG *prev_state )
+NTSTATUS WINAPI GPT_IMPORT(NtSetEvent)( HANDLE handle, LONG *prev_state )
 {
+    /* This comment is a dummy to make sure this patch applies in the right place. */
     unsigned int ret;
+
+    if (do_msync())
+        return msync_set_event( handle, prev_state );
+
+    if (do_esync())
+        return esync_set_event( handle );
 
     SERVER_START_REQ( event_op )
     {
@@ -484,13 +566,32 @@ NTSTATUS WINAPI NtSetEvent( HANDLE handle, LONG *prev_state )
     return ret;
 }
 
+/* CW Hack 23015 */
+#if defined(__APPLE__) && defined(__x86_64__)
+
+NTSTATUS __attribute__((ms_abi)) msthunk_NtSetEvent( HANDLE handle, LONG *prev_state )
+{
+    return sysv_NtSetEvent( handle, prev_state );
+}
+
+GPT_ABI_WRAPPER( NtSetEvent );
+
+#endif
 
 /******************************************************************************
  *              NtResetEvent (NTDLL.@)
  */
-NTSTATUS WINAPI NtResetEvent( HANDLE handle, LONG *prev_state )
+NTSTATUS WINAPI GPT_IMPORT(NtResetEvent)( HANDLE handle, LONG *prev_state )
 {
+    /* This comment is a dummy to make sure this patch applies in the right place. */
     unsigned int ret;
+
+    if (do_msync())
+        return msync_reset_event( handle, prev_state );
+
+    if (do_esync())
+        return esync_reset_event( handle );
+
 
     SERVER_START_REQ( event_op )
     {
@@ -503,23 +604,52 @@ NTSTATUS WINAPI NtResetEvent( HANDLE handle, LONG *prev_state )
     return ret;
 }
 
+/* CW Hack 23015 */
+#if defined(__APPLE__) && defined(__x86_64__)
+
+NTSTATUS __attribute__((ms_abi)) msthunk_NtResetEvent( HANDLE handle, LONG *prev_state )
+{
+    return sysv_NtResetEvent( handle, prev_state );
+}
+
+GPT_ABI_WRAPPER( NtResetEvent );
+
+#endif
 
 /******************************************************************************
  *              NtClearEvent (NTDLL.@)
  */
-NTSTATUS WINAPI NtClearEvent( HANDLE handle )
+NTSTATUS WINAPI GPT_IMPORT(NtClearEvent)( HANDLE handle )
 {
     /* FIXME: same as NtResetEvent ??? */
     return NtResetEvent( handle, NULL );
 }
 
+/* CW Hack 23015 */
+#if defined(__APPLE__) && defined(__x86_64__)
+
+NTSTATUS __attribute__((ms_abi)) msthunk_NtClearEvent( HANDLE handle )
+{
+    return sysv_NtClearEvent( handle );
+}
+
+GPT_ABI_WRAPPER( NtClearEvent );
+
+#endif
+
 
 /******************************************************************************
  *              NtPulseEvent (NTDLL.@)
  */
-NTSTATUS WINAPI NtPulseEvent( HANDLE handle, LONG *prev_state )
+NTSTATUS WINAPI GPT_IMPORT(NtPulseEvent)( HANDLE handle, LONG *prev_state )
 {
     unsigned int ret;
+
+    if (do_msync())
+        return msync_pulse_event( handle, prev_state );
+
+    if (do_esync())
+        return esync_pulse_event( handle );
 
     SERVER_START_REQ( event_op )
     {
@@ -532,6 +662,17 @@ NTSTATUS WINAPI NtPulseEvent( HANDLE handle, LONG *prev_state )
     return ret;
 }
 
+/* CW Hack 23015 */
+#if defined(__APPLE__) && defined(__x86_64__)
+
+NTSTATUS __attribute__((ms_abi)) msthunk_NtPulseEvent( HANDLE handle, LONG *prev_state )
+{
+    return sysv_NtPulseEvent( handle, prev_state );
+}
+
+GPT_ABI_WRAPPER( NtPulseEvent );
+
+#endif
 
 /******************************************************************************
  *              NtQueryEvent (NTDLL.@)
@@ -551,6 +692,12 @@ NTSTATUS WINAPI NtQueryEvent( HANDLE handle, EVENT_INFORMATION_CLASS class,
     }
 
     if (len != sizeof(EVENT_BASIC_INFORMATION)) return STATUS_INFO_LENGTH_MISMATCH;
+
+    if (do_msync())
+        return msync_query_event( handle, info, ret_len );
+
+    if (do_esync())
+        return esync_query_event( handle, info, ret_len );
 
     SERVER_START_REQ( query_event )
     {
@@ -578,6 +725,13 @@ NTSTATUS WINAPI NtCreateMutant( HANDLE *handle, ACCESS_MASK access, const OBJECT
     struct object_attributes *objattr;
 
     *handle = 0;
+
+    if (do_msync())
+        return msync_create_mutex( handle, access, attr, owned );
+
+    if (do_esync())
+        return esync_create_mutex( handle, access, attr, owned );
+
     if ((ret = alloc_object_attributes( attr, &objattr, &len ))) return ret;
 
     SERVER_START_REQ( create_mutex )
@@ -605,6 +759,12 @@ NTSTATUS WINAPI NtOpenMutant( HANDLE *handle, ACCESS_MASK access, const OBJECT_A
     *handle = 0;
     if ((ret = validate_open_object_attributes( attr ))) return ret;
 
+    if (do_msync())
+        return msync_open_mutex( handle, access, attr );
+
+    if (do_esync())
+        return esync_open_mutex( handle, access, attr );
+
     SERVER_START_REQ( open_mutex )
     {
         req->access  = access;
@@ -626,6 +786,12 @@ NTSTATUS WINAPI NtOpenMutant( HANDLE *handle, ACCESS_MASK access, const OBJECT_A
 NTSTATUS WINAPI NtReleaseMutant( HANDLE handle, LONG *prev_count )
 {
     unsigned int ret;
+
+    if (do_msync())
+        return msync_release_mutex( handle, prev_count );
+
+    if (do_esync())
+        return esync_release_mutex( handle, prev_count );
 
     SERVER_START_REQ( release_mutex )
     {
@@ -656,6 +822,12 @@ NTSTATUS WINAPI NtQueryMutant( HANDLE handle, MUTANT_INFORMATION_CLASS class,
     }
 
     if (len != sizeof(MUTANT_BASIC_INFORMATION)) return STATUS_INFO_LENGTH_MISMATCH;
+
+    if (do_msync())
+        return msync_query_mutex( handle, info, ret_len );
+
+    if (do_esync())
+        return esync_query_mutex( handle, info, ret_len );
 
     SERVER_START_REQ( query_mutex )
     {
@@ -1577,6 +1749,20 @@ NTSTATUS WINAPI NtWaitForMultipleObjects( DWORD count, const HANDLE *handles, BO
 
     if (!count || count > MAXIMUM_WAIT_OBJECTS) return STATUS_INVALID_PARAMETER_1;
 
+    if (do_msync())
+    {
+        NTSTATUS ret = msync_wait_objects( count, handles, wait_any, alertable, timeout );
+        if (ret != STATUS_NOT_IMPLEMENTED)
+            return ret;
+    }
+
+    if (do_esync())
+    {
+        NTSTATUS ret = esync_wait_objects( count, handles, wait_any, alertable, timeout );
+        if (ret != STATUS_NOT_IMPLEMENTED)
+            return ret;
+    }
+
     if (alertable) flags |= SELECT_ALERTABLE;
     select_op.wait.op = wait_any ? SELECT_WAIT : SELECT_WAIT_ALL;
     for (i = 0; i < count; i++) select_op.wait.handles[i] = wine_server_obj_handle( handles[i] );
@@ -1601,6 +1787,12 @@ NTSTATUS WINAPI NtSignalAndWaitForSingleObject( HANDLE signal, HANDLE wait,
 {
     union select_op select_op;
     UINT flags = SELECT_INTERRUPTIBLE;
+
+    if (do_msync())
+        return msync_signal_and_wait( signal, wait, alertable, timeout );
+
+    if (do_esync())
+        return esync_signal_and_wait( signal, wait, alertable, timeout );
 
     if (!signal) return STATUS_INVALID_HANDLE;
 
@@ -1642,7 +1834,17 @@ NTSTATUS WINAPI NtYieldExecution(void)
 NTSTATUS WINAPI NtDelayExecution( BOOLEAN alertable, const LARGE_INTEGER *timeout )
 {
     /* if alertable, we need to query the server */
-    if (alertable) return server_wait( NULL, 0, SELECT_INTERRUPTIBLE | SELECT_ALERTABLE, timeout );
+    if (alertable)
+    {
+        if (do_msync())
+        {
+            NTSTATUS ret = msync_wait_objects( 0, NULL, TRUE, TRUE, timeout );
+            if (ret != STATUS_NOT_IMPLEMENTED)
+                return ret;
+        }
+
+        return server_wait( NULL, 0, SELECT_INTERRUPTIBLE | SELECT_ALERTABLE, timeout );
+    }
 
     if (!timeout || timeout->QuadPart == TIMEOUT_INFINITE)  /* sleep forever */
     {

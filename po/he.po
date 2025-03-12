@@ -543,7 +543,7 @@ msgstr "פרטים"
 
 #: dlls/comctl32/comctl32.rc:31 dlls/cryptui/cryptui.rc:235
 #: programs/regedit/regedit.rc:291 programs/taskmgr/taskmgr.rc:434
-#: programs/winedbg/winedbg.rc:61 programs/winedbg/winedbg.rc:76
+#: programs/winedbg/winedbg.rc:59 programs/winedbg/winedbg.rc:71
 #: programs/wordpad/wordpad.rc:180
 msgid "Close"
 msgstr "סגירה"
@@ -8577,7 +8577,7 @@ msgstr "הרשת כולה"
 msgid "Sound Selection"
 msgstr "בחירת צליל"
 
-#: dlls/msacm32/msacm32.rc:39 programs/winedbg/winedbg.rc:77
+#: dlls/msacm32/msacm32.rc:39 programs/winedbg/winedbg.rc:72
 msgid "&Save As..."
 msgstr "שמירה &בשם..."
 
@@ -11027,8 +11027,8 @@ msgstr ""
 "הפחות כללי של  GNU כפי שפורסם על ידי מוסד התכנה החופשית; או גרסה 2.1 של "
 "הרישיון או (לבחירתך) כל גרסה עדכנית יותר.\n"
 "\n"
-"Wine מופצת בתקווה שתביא תועלת, אך ללא כל אחריות; אפילו לא מרומזת למטרות, "
-"‎מסחר או התאמה לצרכים מסוימים. נא לעיין בתנאי הרישיון הציבורי הפחות כללי של "
+"Wine מופצת בתקווה שתביא תועלת, אך ללא כל אחריות; אפילו לא מרומזת למטרות, ‎"
+"מסחר או התאמה לצרכים מסוימים. נא לעיין בתנאי הרישיון הציבורי הפחות כללי של "
 "GNU לפרטים נוספים.\n"
 "\n"
 "ל־Wine אמור היה להיות מצורף עותק של הרישיון הציבורי הפחות כללי של GNU; במידה "
@@ -19736,12 +19736,13 @@ msgid ""
 "sorry for the inconvenience."
 msgstr "התכנית %s נתקלה בשגיאה חמורה ועליה להיסגר. אנו מתנצלים על אי הנעימות."
 
-#: programs/winedbg/winedbg.rc:59
+#: programs/winedbg/winedbg.rc:57
 #, fuzzy
 msgid ""
 "This can be caused by a problem in the program or a deficiency in Wine. You "
-"may want to check the <a href=\"https://appdb.winehq.org\">Application "
-"Database</a> for tips about running this application."
+"may want to check <a href=\"https://www.codeweavers.com/compatibility/"
+"\">https://www.codeweavers.com/compatibility/</a> for tips about running "
+"this application."
 msgstr ""
 "בעיה זו עלולה להיגרם עקב תקלה בתכנית או מחסור מסוים ב־Wine. אולי מוטב לפנות "
 "לכתובת https://appdb.winehq.org לקבלת עצות להרצת יישום זה.\n"
@@ -19749,22 +19750,22 @@ msgstr ""
 "אם תקלה זו אינה קיימת בעת הרצת Windows ולא דווח עליה עדיין, ניתן לדווח עליה "
 "בכתובת https://bugs.winehq.org."
 
-#: programs/winedbg/winedbg.rc:62
+#: programs/winedbg/winedbg.rc:60
 #, fuzzy
 msgid "Show &Details"
 msgstr "&פרטים"
 
-#: programs/winedbg/winedbg.rc:67
+#: programs/winedbg/winedbg.rc:65
 #, fuzzy
 msgid "Program Error Details"
 msgstr "שגיאה בתכנית"
 
-#: programs/winedbg/winedbg.rc:74
+#: programs/winedbg/winedbg.rc:69
 msgid ""
 "If this problem is not present under Windows and has not been reported yet, "
 "you can save the detailed information to a file using the \"Save As\" "
-"button, then <a href=\"https://gitlab.winehq.org/wine/wine/-/wikis/"
-"Bugs\">file a bug report</a> and attach that file to the report."
+"button, then <a href=\"https://www.codeweavers.com/support/tickets/enter/"
+"\">file a bug report</a> and attach that file to the report."
 msgstr ""
 
 #: programs/winedbg/winedbg.rc:40

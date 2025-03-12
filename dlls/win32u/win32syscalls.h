@@ -430,8 +430,10 @@
     SYSCALL_ENTRY( 0x01aa, NtUserWaitMessage, 0 ) \
     SYSCALL_ENTRY( 0x01ab, NtUserWindowFromDC, 4 ) \
     SYSCALL_ENTRY( 0x01ac, NtUserWindowFromPoint, 8 ) \
-    SYSCALL_ENTRY( 0x01ad, __wine_get_file_outline_text_metric, 16 ) \
-    SYSCALL_ENTRY( 0x01ae, __wine_get_icm_profile, 16 )
+    SYSCALL_ENTRY( 0x01ad, __wine_get_current_process_explicit_app_user_model_id, 8 ) \
+    SYSCALL_ENTRY( 0x01ae, __wine_get_file_outline_text_metric, 16 ) \
+    SYSCALL_ENTRY( 0x01af, __wine_get_icm_profile, 16 ) \
+    SYSCALL_ENTRY( 0x01b0, __wine_set_current_process_explicit_app_user_model_id, 4 )
 
 #define ALL_SYSCALLS64 \
     SYSCALL_ENTRY( 0x0000, NtGdiAbortDoc, 8 ) \
@@ -863,5 +865,7 @@
     SYSCALL_ENTRY( 0x01aa, NtUserWaitMessage, 0 ) \
     SYSCALL_ENTRY( 0x01ab, NtUserWindowFromDC, 8 ) \
     SYSCALL_ENTRY( 0x01ac, NtUserWindowFromPoint, 16 ) \
-    SYSCALL_ENTRY( 0x01ad, __wine_get_file_outline_text_metric, 32 ) \
-    SYSCALL_ENTRY( 0x01ae, __wine_get_icm_profile, 32 )
+    SYSCALL_ENTRY( 0x01ad, __wine_get_current_process_explicit_app_user_model_id, 16 ) \
+    SYSCALL_ENTRY( 0x01ae, __wine_get_file_outline_text_metric, 32 ) \
+    SYSCALL_ENTRY( 0x01af, __wine_get_icm_profile, 32 ) \
+    SYSCALL_ENTRY( 0x01b0, __wine_set_current_process_explicit_app_user_model_id, 8 )

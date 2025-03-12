@@ -46,6 +46,31 @@ static CFMutableDictionaryRef win_datas;
 static unsigned int activate_on_focus_time;
 
 
+/* CrossOver Hack #16933 */
+static BOOL is_main_quicken_window(HWND hwnd)
+{
+    static const WCHAR qw_exeW[] = {'q','w','.','e','x','e',0};
+    static const WCHAR qframeW[] = {'Q','F','R','A','M','E',0};
+    static int is_qw_exe = -1;
+    WCHAR class[32];
+    UNICODE_STRING name = { .Buffer = class, .MaximumLength = sizeof(class) };
+
+    if (is_qw_exe == -1)
+    {
+        WCHAR *name = NtCurrentTeb()->Peb->ProcessParameters->ImagePathName.Buffer;
+        WCHAR *module_exe = wcsrchr(name, '\\');
+        module_exe = module_exe ? module_exe + 1 : name;
+
+        is_qw_exe = !wcsicmp(module_exe, qw_exeW);
+    }
+
+    if (!is_qw_exe || !NtUserGetClassName(hwnd, FALSE, &name))
+        return FALSE;
+
+    return !wcscmp(class, qframeW);
+}
+
+
 /* per-monitor DPI aware NtUserSetWindowPos call */
 static BOOL set_window_pos(HWND hwnd, HWND after, INT x, INT y, INT cx, INT cy, UINT flags)
 {
@@ -94,6 +119,13 @@ static struct macdrv_window_features get_cocoa_window_features(struct macdrv_win
 
     if (ex_style & WS_EX_NOACTIVATE) wf.prevents_app_activation = TRUE;
     if (EqualRect(&data->rects.window, &data->rects.visible)) return wf;
+
+    /* CrossOver Hack #16933 */
+    if (is_main_quicken_window(data->hwnd))
+    {
+        wf.resizable = TRUE;
+        return wf;
+    }
 
     return get_window_features_for_style(style, ex_style, data->shaped);
 }
@@ -1023,8 +1055,46 @@ static void set_app_icon(void)
     CFArrayRef images = create_app_icon_images();
     if (images)
     {
-        macdrv_set_application_icon(images);
+        macdrv_set_application_icon(images, NULL);
         CFRelease(images);
+    }
+    else /* CrossOver Hack 13440: Find an icon from the CrossOver app bundle */
+    {
+        const char *cx_root;
+        if ((cx_root = getenv("CX_ROOT")) && cx_root[0])
+        {
+            CFURLRef url, temp;
+            url = CFURLCreateFromFileSystemRepresentation(NULL, (UInt8*)cx_root, strlen(cx_root), TRUE);
+            if (url)
+            {
+                temp = CFURLCreateCopyDeletingLastPathComponent(NULL, url);
+                CFRelease(url);
+                url = temp;
+            }
+            if (url)
+            {
+                temp = CFURLCreateCopyDeletingLastPathComponent(NULL, url);
+                CFRelease(url);
+                url = temp;
+            }
+            if (url)
+            {
+                temp = CFURLCreateCopyAppendingPathComponent(NULL, url, CFSTR("Resources"), TRUE);
+                CFRelease(url);
+                url = temp;
+            }
+            if (url)
+            {
+                temp = CFURLCreateCopyAppendingPathComponent(NULL, url, CFSTR("exeIcon.icns"), FALSE);
+                CFRelease(url);
+                url = temp;
+            }
+            if (url)
+            {
+                macdrv_set_application_icon(NULL, url);
+                CFRelease(url);
+            }
+        }
     }
 }
 
@@ -1704,6 +1774,9 @@ BOOL macdrv_GetWindowStyleMasks(HWND hwnd, UINT style, UINT ex_style, UINT *styl
 {
     struct macdrv_window_features wf = get_window_features_for_style(style, ex_style, FALSE);
 
+    /* CW HACK 16933: No Cocoa window decorations for the Quicken main window. */
+    if (is_main_quicken_window(hwnd)) return FALSE;
+
     *style_mask = ex_style = 0;
     if (wf.title_bar)
     {
@@ -1899,12 +1972,7 @@ void macdrv_window_got_focus(HWND hwnd, const macdrv_event *event)
 
     if (can_window_become_foreground(hwnd) && !(style & WS_MINIMIZE))
     {
-        /* simulate a mouse click on the menu to find out
-         * whether the window wants to be activated */
-        LRESULT ma = send_message(hwnd, WM_MOUSEACTIVATE,
-                                  (WPARAM)NtUserGetAncestor(hwnd, GA_ROOT),
-                                  MAKELONG(HTMENU, WM_LBUTTONDOWN));
-        if (ma != MA_NOACTIVATEANDEAT && ma != MA_NOACTIVATE)
+        /* CrossOver Hack #18896: don't send WM_MOUSEACTIVATE, it breaks Unity games */
         {
             TRACE("setting foreground window to %p\n", hwnd);
             NtUserSetForegroundWindow(hwnd);

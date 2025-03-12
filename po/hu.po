@@ -552,7 +552,7 @@ msgstr "Részletek"
 
 #: dlls/comctl32/comctl32.rc:31 dlls/cryptui/cryptui.rc:235
 #: programs/regedit/regedit.rc:291 programs/taskmgr/taskmgr.rc:434
-#: programs/winedbg/winedbg.rc:61 programs/winedbg/winedbg.rc:76
+#: programs/winedbg/winedbg.rc:59 programs/winedbg/winedbg.rc:71
 #: programs/wordpad/wordpad.rc:180
 msgid "Close"
 msgstr "Bezárás"
@@ -8559,7 +8559,7 @@ msgstr "Teljes hálózat"
 msgid "Sound Selection"
 msgstr "Hang kiválasztás"
 
-#: dlls/msacm32/msacm32.rc:39 programs/winedbg/winedbg.rc:77
+#: dlls/msacm32/msacm32.rc:39 programs/winedbg/winedbg.rc:72
 msgid "&Save As..."
 msgstr "&Mentés másként..."
 
@@ -20182,35 +20182,49 @@ msgstr ""
 "A %s program szembekerült egy komoly problémával és ezért szükséges bezárni. "
 "Elnézést kérünk a kellemetlenségért."
 
-#: programs/winedbg/winedbg.rc:59
+#: programs/winedbg/winedbg.rc:57
+#, fuzzy
+#| msgid ""
+#| "This can be caused by a problem in the program or a deficiency in Wine. "
+#| "You may want to check <a href=\"http://www.codeweavers.com/compatibility/"
+#| "\">http://www.codeweavers.com/compatibility/</a> for tips about running "
+#| "this application."
 msgid ""
 "This can be caused by a problem in the program or a deficiency in Wine. You "
-"may want to check the <a href=\"https://appdb.winehq.org\">Application "
-"Database</a> for tips about running this application."
+"may want to check <a href=\"https://www.codeweavers.com/compatibility/"
+"\">https://www.codeweavers.com/compatibility/</a> for tips about running "
+"this application."
 msgstr ""
 "Ezt okozhatja egy programban lévő hiba vagy a Wine hiányossága. "
-"Ellenőrizheti a <a href=\"https://appdb.winehq.org\">Alkalmazás adatbázis</"
-"a> tippjeit az alkalmazással kapcsolatban."
+"Ellenőrizheti a <a href=\"http://www.codeweavers.com/compatibility/\">http://"
+"www.codeweavers.com/compatibility/</a> tippjeit az alkalmazással "
+"kapcsolatban."
 
-#: programs/winedbg/winedbg.rc:62
+#: programs/winedbg/winedbg.rc:60
 msgid "Show &Details"
 msgstr "&Részletek"
 
-#: programs/winedbg/winedbg.rc:67
+#: programs/winedbg/winedbg.rc:65
 msgid "Program Error Details"
 msgstr "Program hibarészletező"
 
-#: programs/winedbg/winedbg.rc:74
+#: programs/winedbg/winedbg.rc:69
+#, fuzzy
+#| msgid ""
+#| "If this problem is not present under Windows and has not been reported "
+#| "yet, you can save the detailed information to a file using the \"Save As"
+#| "\" button, then <a href=\"http://www.codeweavers.com/support/tickets/"
+#| "enter/\">file a bug report</a> and attach that file to the report."
 msgid ""
 "If this problem is not present under Windows and has not been reported yet, "
 "you can save the detailed information to a file using the \"Save As\" "
-"button, then <a href=\"https://gitlab.winehq.org/wine/wine/-/wikis/"
-"Bugs\">file a bug report</a> and attach that file to the report."
+"button, then <a href=\"https://www.codeweavers.com/support/tickets/enter/"
+"\">file a bug report</a> and attach that file to the report."
 msgstr ""
 "Ha ez a probléma még nincs jelen Windows alatt és nem lett lejelentve, "
 "lementheti a részletes információt egy fájlba a Mentés másként nyomógomb "
-"használatával, azután <a href=\"https://gitlab.winehq.org/wine/wine/-/wikis/"
-"Bugs\">fájl hibajelentéshez</a> és csatolja azt a fájlt a jelentéshez."
+"használatával, azután <a href=\"http://www.codeweavers.com/support/tickets/"
+"enter/\">fájl hibajelentéshez</a> és csatolja azt a fájlt a jelentéshez."
 
 #: programs/winedbg/winedbg.rc:40
 msgid ""

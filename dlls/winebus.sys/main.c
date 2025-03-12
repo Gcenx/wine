@@ -1049,6 +1049,20 @@ static NTSTATUS iohid_driver_init(void)
     return bus_main_thread_start(&bus);
 }
 
+static NTSTATUS xbox_driver_init(void)
+{
+    struct xbox_bus_options bus_options;
+    struct bus_main_params bus =
+    {
+        .name = L"XBOX",
+        .init_args = &bus_options,
+        .init_code = xbox_init,
+        .wait_code = xbox_wait,
+    };
+
+    return bus_main_thread_start(&bus);
+}
+
 static NTSTATUS fdo_pnp_dispatch(DEVICE_OBJECT *device, IRP *irp)
 {
     IO_STACK_LOCATION *irpsp = IoGetCurrentIrpStackLocation(irp);
@@ -1068,6 +1082,7 @@ static NTSTATUS fdo_pnp_dispatch(DEVICE_OBJECT *device, IRP *irp)
             enable_sdl = !sdl_driver_init();
         udev_driver_init(enable_sdl);
         iohid_driver_init();
+        xbox_driver_init();
 
         irp->IoStatus.Status = STATUS_SUCCESS;
         break;
@@ -1078,6 +1093,7 @@ static NTSTATUS fdo_pnp_dispatch(DEVICE_OBJECT *device, IRP *irp)
         winebus_call(sdl_stop, NULL);
         winebus_call(udev_stop, NULL);
         winebus_call(iohid_stop, NULL);
+        winebus_call(xbox_stop, NULL);
 
         WaitForMultipleObjects(bus_count, bus_thread, TRUE, INFINITE);
         while (bus_count--) CloseHandle(bus_thread[bus_count]);

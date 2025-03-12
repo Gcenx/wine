@@ -125,7 +125,9 @@ static const struct object_ops dir_ops =
     no_open_file,             /* open_file */
     no_kernel_obj_list,       /* get_kernel_obj_list */
     dir_close_handle,         /* close_handle */
-    dir_destroy               /* destroy */
+    dir_destroy,              /* destroy */
+    default_fd_get_esync_fd,  /* get_esync_fd */
+    default_fd_get_msync_idx, /* get_msync_idx */
 };
 
 static int dir_get_poll_events( struct fd *fd );

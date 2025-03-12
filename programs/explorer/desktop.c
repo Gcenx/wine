@@ -1185,7 +1185,8 @@ static void set_shell_window( HWND hwnd )
 
     if (!(desk = GetThreadDesktop( GetCurrentThreadId() )) ||
         !GetUserObjectInformationW( desk, UOI_NAME, desk_name, ARRAY_SIZE( desk_name ), NULL ) ||
-        wcscmp( desk_name, L"Default" ))
+        (wcscmp( desk_name, L"Default" ) &&
+         wcscmp( desk_name, L"root" ) /* CW Hack 24270 */))
     {
         return;
     }
@@ -1317,7 +1318,6 @@ void manage_desktop( WCHAR *arg )
     }
 
     desktopshellbrowserwindow_init();
-    shellwindows_init();
 
     /* Ideally we would set the window of an IShellView here, but we never
        actually create one, so the desktop window itself will have to do. */
@@ -1326,6 +1326,8 @@ void manage_desktop( WCHAR *arg )
     /* run the desktop message loop */
     if (hwnd)
     {
+        shellwindows_init();
+
         TRACE( "desktop message loop starting on hwnd %p\n", hwnd );
         while (GetMessageW( &msg, 0, 0, 0 )) DispatchMessageW( &msg );
         TRACE( "desktop message loop exiting for hwnd %p\n", hwnd );

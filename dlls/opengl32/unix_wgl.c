@@ -29,6 +29,12 @@
 
 #include <pthread.h>
 
+#ifdef __APPLE__
+#include <CoreFoundation/CoreFoundation.h>
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#endif
+
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
 #include "windef.h"
@@ -65,6 +71,14 @@ enum wgl_handle_type
     HANDLE_TYPE_MASK = 15 << 12,
 };
 
+#ifdef __APPLE__
+struct gl_resources
+{
+    CFMutableDictionaryRef mapped_buffers;
+    LONG refcount;
+};
+#endif
+
 struct opengl_context
 {
     DWORD tid;                   /* thread that the context is current in */
@@ -74,6 +88,12 @@ struct opengl_context
     GLuint *disabled_exts;       /* indices of disabled extensions */
     struct wgl_context *drv_ctx; /* driver context */
     GLubyte *version_string;
+
+#ifdef __APPLE__
+    LONG last_error;
+    struct gl_resources *resources;
+    void *pending_mapped;
+#endif
 };
 
 struct wgl_handle
@@ -351,25 +371,44 @@ static BOOL filter_extensions( TEB * teb, const char *extensions, GLubyte **exts
     if (!disabled)
     {
         char *str = NULL;
-        HKEY hkey;
+        HKEY hkey, appkey = 0, tmpkey;
+        const WCHAR *p, *appname;
+        ULONG len;
+        char buffer[4096];
+        KEY_VALUE_PARTIAL_INFORMATION *value = (void *)buffer;
+        WCHAR *bufferW = (WCHAR *)buffer;
+        static WCHAR disabled_extensionsW[] = {'D','i','s','a','b','l','e','d','E','x','t','e','n','s','i','o','n','s',0};
 
         /* @@ Wine registry key: HKCU\Software\Wine\OpenGL */
-        if ((hkey = open_hkcu_key( "Software\\Wine\\OpenGL" )))
+        hkey = open_hkcu_key( "Software\\Wine\\OpenGL" );
+
+        /* open the app-specific key */
+        appname = NtCurrentTeb()->Peb->ProcessParameters->ImagePathName.Buffer;
+        if ((p = wcsrchr( appname, '/' ))) appname = p + 1;
+        if ((p = wcsrchr( appname, '\\' ))) appname = p + 1;
+        len = wcslen( appname );
+        if (len && len < MAX_PATH)
         {
-            char buffer[4096];
-            KEY_VALUE_PARTIAL_INFORMATION *value = (void *)buffer;
-            static WCHAR disabled_extensionsW[] = {'D','i','s','a','b','l','e','d','E','x','t','e','n','s','i','o','n','s',0};
+            memcpy( buffer, appname, len * sizeof(WCHAR) );
+            asciiz_to_unicode( bufferW + len, "\\OpenGL" );
 
-            if (!query_reg_value( hkey, disabled_extensionsW, value, sizeof(buffer) ))
+            /* @@ Wine registry key: HKCU\Software\Wine\AppDefaults\app.exe\OpenGL */
+            if ((tmpkey = open_hkcu_key( "Software\\Wine\\AppDefaults" )))
             {
-                ULONG len = value->DataLength / sizeof(WCHAR);
-
-                unicode_to_ascii( buffer, (WCHAR *)value->Data, len );
-                buffer[len] = 0;
-                str = strdup( buffer );
+                appkey = reg_open_key( tmpkey, bufferW, wcslen( bufferW ) * sizeof(WCHAR) );
+                NtClose( tmpkey );
             }
-            NtClose( hkey );
         }
+        if ((appkey && !query_reg_value( appkey, disabled_extensionsW, value, sizeof(buffer) )) ||
+            (hkey && !query_reg_value( hkey, disabled_extensionsW, value, sizeof(buffer) )))
+        {
+            len = value->DataLength / sizeof(WCHAR);
+            unicode_to_ascii( buffer, (WCHAR *)value->Data, len );
+            buffer[len] = 0;
+            str = strdup( buffer );
+        }
+        if (appkey) NtClose( appkey );
+        if (hkey) NtClose( hkey );
         if (str)
         {
             if (InterlockedCompareExchangePointer( (void **)&disabled, str, NULL )) free( str );
@@ -1261,6 +1300,53 @@ static inline void update_teb32_context( TEB *teb )
     ((TEB32 *)teb32)->glReserved1[1] = (UINT_PTR)teb->glReserved1[1];
 }
 
+#ifdef __APPLE__
+static void create_context_init_resources(TEB *teb, HGLRC *hglrc, HGLRC share)
+{
+    struct wgl_handle *ptr = get_handle_ptr(*hglrc, HANDLE_CONTEXT);
+    struct opengl_context *context = ptr->u.context, *share_context;
+
+    TRACE( "teb %p, hglrc %p, share %p.\n", teb, hglrc, share );
+
+    if (share)
+    {
+        ptr = get_handle_ptr(share, HANDLE_CONTEXT);
+        share_context = ptr->u.context;
+    }
+    InterlockedExchange(&context->last_error, GL_NO_ERROR);
+
+    pthread_mutex_lock( &wgl_lock );
+    if (share)
+    {
+        share_context->resources->refcount++;
+        context->resources = share_context->resources;
+    }
+    else
+    {
+        if (!(context->resources = malloc(sizeof(*context->resources))))
+        {
+            pthread_mutex_unlock( &wgl_lock );
+            wrap_wglDeleteContext( teb, *hglrc );
+            *hglrc = 0;
+            RtlSetLastWin32Error(ERROR_NOT_ENOUGH_MEMORY);
+            return;
+        }
+        if (!(context->resources->mapped_buffers = CFDictionaryCreateMutable(NULL, 0, NULL, NULL)))
+        {
+            pthread_mutex_unlock( &wgl_lock );
+            WARN("CFDictionaryCreateMutable() failed\n");
+            free(context->resources);
+            wrap_wglDeleteContext( teb, *hglrc );
+            *hglrc = 0;
+            RtlSetLastWin32Error(ERROR_NOT_ENOUGH_MEMORY);
+            return;
+        }
+        context->resources->refcount = 1;
+    }
+    pthread_mutex_unlock( &wgl_lock );
+}
+#endif
+
 NTSTATUS wow64_wgl_wglCreateContext( void *args )
 {
     struct
@@ -1275,8 +1361,13 @@ NTSTATUS wow64_wgl_wglCreateContext( void *args )
         .hDc = ULongToPtr(params32->hDc),
     };
     NTSTATUS status;
+
     if ((status = wgl_wglCreateContext( &params ))) return status;
     params32->ret = (UINT_PTR)params.ret;
+#ifdef __APPLE__
+    if (params.ret)
+        create_context_init_resources(params.teb, &params.ret, 0);
+#endif
     return STATUS_SUCCESS;
 }
 
@@ -1300,7 +1391,135 @@ NTSTATUS wow64_ext_wglCreateContextAttribsARB( void *args )
     NTSTATUS status;
     if ((status = ext_wglCreateContextAttribsARB( &params ))) return status;
     params32->ret = (UINT_PTR)params.ret;
+#ifdef __APPLE__
+    if (params.ret)
+        create_context_init_resources(params.teb, &params.ret, params.hShareContext);
+#endif
     return STATUS_SUCCESS;
+}
+
+#ifdef __APPLE__
+static void set_mapped_buffer(CFMutableDictionaryRef mapped_buffers, GLuint buffer, void *addr)
+{
+    TRACE("buffer %u address %p\n", buffer, addr);
+    CFDictionarySetValue(mapped_buffers, (const void *)(ULONG_PTR)buffer, addr);
+}
+
+static void free_mapped_buffer(struct opengl_context *context, GLuint buffer)
+{
+    CFMutableDictionaryRef mapped_buffers = context->resources->mapped_buffers;
+    const void *addr;
+    SIZE_T size = 0;
+
+    if ((addr = CFDictionaryGetValue(mapped_buffers, (const void *)(ULONG_PTR)buffer)))
+    {
+        TRACE("buffer %u address %p\n", buffer, addr);
+        if (context->pending_mapped)
+        {
+            TRACE("Freeing previously preserved memory at address %p\n", context->pending_mapped);
+            NtFreeVirtualMemory(GetCurrentProcess(), &context->pending_mapped, &size, MEM_RELEASE);
+        }
+        context->pending_mapped = (void *)addr;
+        CFDictionaryRemoveValue(mapped_buffers, (const void *)(ULONG_PTR)buffer);
+    }
+}
+
+static void free_mapped_buffer_applier(const void *key, const void *value, void *context)
+{
+    SIZE_T size = 0;
+
+    TRACE("buffer %u address %p\n", (unsigned int)(ULONG_PTR)key, value);
+    NtFreeVirtualMemory(GetCurrentProcess(), (void *)value, &size, MEM_RELEASE);
+}
+
+
+/**********************************************************************
+ *              free_mapped_buffers
+ *
+ * Unmap all low memory associated with buffers in a context.
+ */
+static void free_mapped_buffers(struct opengl_context *context)
+{
+    struct gl_resources *resources = context->resources;
+    SIZE_T size = 0;
+
+    pthread_mutex_lock( &wgl_lock );
+    if (context->pending_mapped)
+    {
+        TRACE("Freeing previously preserved memory at address %p\n", context->pending_mapped);
+        NtFreeVirtualMemory(GetCurrentProcess(), &context->pending_mapped, &size, MEM_RELEASE);
+    }
+    context->pending_mapped = NULL;
+
+    if (!--context->resources->refcount)
+    {
+        CFMutableDictionaryRef mapped_buffers = resources->mapped_buffers;
+
+        CFDictionaryApplyFunction(mapped_buffers, free_mapped_buffer_applier, NULL);
+        CFRelease(mapped_buffers);
+        free(resources);
+    }
+    pthread_mutex_unlock( &wgl_lock );
+}
+
+static GLenum binding_for_target(GLenum target)
+{
+    switch (target)
+    {
+        case GL_ARRAY_BUFFER: return GL_ARRAY_BUFFER_BINDING;
+        case GL_ATOMIC_COUNTER_BUFFER: return GL_ATOMIC_COUNTER_BUFFER_BINDING;
+        case GL_COPY_READ_BUFFER: return GL_COPY_READ_BUFFER_BINDING;
+        case GL_COPY_WRITE_BUFFER: return GL_COPY_WRITE_BUFFER_BINDING;
+        case GL_DISPATCH_INDIRECT_BUFFER: return GL_DISPATCH_INDIRECT_BUFFER_BINDING;
+        case GL_DRAW_INDIRECT_BUFFER: return GL_DRAW_INDIRECT_BUFFER_BINDING;
+        case GL_ELEMENT_ARRAY_BUFFER: return GL_ELEMENT_ARRAY_BUFFER_BINDING;
+        case GL_PIXEL_PACK_BUFFER: return GL_PIXEL_PACK_BUFFER_BINDING;
+        case GL_PIXEL_UNPACK_BUFFER: return GL_PIXEL_UNPACK_BUFFER_BINDING;
+        case GL_QUERY_BUFFER: return GL_QUERY_BUFFER_BINDING;
+        case GL_SHADER_STORAGE_BUFFER: return GL_SHADER_STORAGE_BUFFER_BINDING;
+        case GL_TEXTURE_BUFFER: return GL_TEXTURE_BUFFER_BINDING;
+        case GL_TRANSFORM_FEEDBACK_BUFFER: return GL_TRANSFORM_FEEDBACK_BUFFER_BINDING;
+        case GL_UNIFORM_BUFFER: return GL_UNIFORM_BUFFER_BINDING;
+    }
+
+    return target;
+}
+#endif
+
+NTSTATUS wow64_wgl_wglShareLists( void *args )
+{
+    struct
+    {
+        PTR32 teb;
+        PTR32 hrcSrvShare;
+        PTR32 hrcSrvSource;
+        BOOL ret;
+    } *params32 = args;
+    struct wglShareLists_params params =
+    {
+        .teb = get_teb64(params32->teb),
+        .hrcSrvShare = ULongToPtr(params32->hrcSrvShare),
+        .hrcSrvSource = ULongToPtr(params32->hrcSrvSource),
+    };
+    NTSTATUS status;
+    status = wgl_wglShareLists( &params );
+    params32->ret = params.ret;
+#ifdef __APPLE__
+    /* HACK: winemac.drv recreates the destination context (which here is
+     * confusingly called "hrcSrvSource") to implement wglShareLists(), let's
+     * update the destination context's resource map. */
+    if (params.ret)
+    {
+        struct wgl_handle *ptr = get_handle_ptr(params.hrcSrvSource, HANDLE_CONTEXT);
+        struct opengl_context *dst = ptr->u.context;
+
+        if (dst->resources->refcount != 1)
+            ERR("Unexpected remapped resources refcount!\n");
+        free_mapped_buffers(dst);
+        create_context_init_resources(params.teb, &params.hrcSrvSource, params.hrcSrvShare);
+    }
+#endif
+    return status;
 }
 
 NTSTATUS wow64_ext_wglCreatePbufferARB( void *args )
@@ -1344,6 +1563,12 @@ NTSTATUS wow64_wgl_wglDeleteContext( void *args )
         .oldContext = ULongToPtr(params32->oldContext),
     };
     NTSTATUS status;
+
+#ifdef __APPLE__
+    struct wgl_handle *ptr = get_handle_ptr(params.oldContext, HANDLE_CONTEXT);
+
+    if (ptr) free_mapped_buffers(ptr->u.context);
+#endif
     if (!(status = wgl_wglDeleteContext( &params ))) update_teb32_context( params.teb );
     params32->ret = params.ret;
     return status;
@@ -1818,6 +2043,30 @@ NTSTATUS wow64_ext_glWaitSync( void *args )
     return status;
 }
 
+NTSTATUS wow64_gl_glGetError( void *args )
+{
+    struct
+    {
+        PTR32 teb;
+        GLenum ret;
+    } *params32 = args;
+    struct glGetError_params params =
+    {
+        .teb = get_teb64(params32->teb),
+    };
+    const struct opengl_funcs *funcs = params.teb->glTable;
+
+#ifdef __APPLE__
+    struct wgl_handle *ptr = get_current_context_ptr( params.teb );
+    struct opengl_context *current = ptr->u.context;
+
+    if ((params32->ret = InterlockedExchange(&current->last_error, GL_NO_ERROR)) != GL_NO_ERROR)
+        return STATUS_SUCCESS;
+#endif
+    params32->ret = funcs->gl.p_glGetError();
+    return STATUS_SUCCESS;
+}
+
 static GLint get_buffer_param( TEB *teb, GLenum target, GLenum param )
 {
     const struct opengl_funcs *funcs = teb->glTable;
@@ -1828,6 +2077,7 @@ static GLint get_buffer_param( TEB *teb, GLenum target, GLenum param )
     return size;
 }
 
+#ifndef __APPLE__
 static void *get_buffer_pointer( TEB *teb, GLenum target )
 {
     const struct opengl_funcs *funcs = teb->glTable;
@@ -1837,6 +2087,7 @@ static void *get_buffer_pointer( TEB *teb, GLenum target )
     if (func) func( target, GL_BUFFER_MAP_POINTER, &ptr );
     return ptr;
 }
+#endif
 
 static GLint get_named_buffer_param( TEB *teb, GLint buffer, GLenum param )
 {
@@ -1963,6 +2214,26 @@ static NTSTATUS wow64_gl_get_buffer_pointer_v( void *args, NTSTATUS (*get_buffer
     PTR32 *wow_ptr = UlongToPtr(params32->params);
     NTSTATUS status;
 
+#ifdef __APPLE__
+    if (params.pname == GL_BUFFER_MAP_POINTER)
+    {
+        const struct opengl_funcs *funcs = params.teb->glTable;
+        struct wgl_handle *ptr = get_current_context_ptr( params.teb );
+        struct opengl_context *current = ptr->u.context;
+        GLuint buffer;
+        void *addr;
+
+        funcs->gl.p_glGetIntegerv(binding_for_target(params.target), (GLint *)&buffer);
+        /* Let the native GL handle the default buffer (that is, no buffer at all). */
+        if (buffer != 0 &&
+            (addr = (void *)CFDictionaryGetValue(current->resources->mapped_buffers, (const void *)(ULONG_PTR)buffer)))
+        {
+            TRACE("buffer %u address %p\n", buffer, addr);
+            *wow_ptr = (PTR32)(ULONG_PTR)addr;
+            return STATUS_SUCCESS;
+        }
+    }
+#endif
     if ((status = get_buffer_pointer_v64( &params ))) return status;
     if (params.pname != GL_BUFFER_MAP_POINTER) return STATUS_NOT_IMPLEMENTED;
     if (ULongToPtr(*wow_ptr = PtrToUlong(ptr)) == ptr) return STATUS_SUCCESS;  /* we're lucky */
@@ -2000,6 +2271,9 @@ static NTSTATUS wow64_gl_get_named_buffer_pointer_v( void *args, NTSTATUS (*gl_g
     PTR32 *wow_ptr = UlongToPtr(params32->params);
     NTSTATUS status;
 
+#ifdef __APPLE__
+    FIXME("macOS memory remap hack not implemented for this API\n");
+#endif
     if ((status = gl_get_named_buffer_pointer_v64( &params ))) return status;
     if (params.pname != GL_BUFFER_MAP_POINTER) return STATUS_NOT_IMPLEMENTED;
     if (ULongToPtr(*wow_ptr = PtrToUlong(ptr)) == ptr) return STATUS_SUCCESS;  /* we're lucky */
@@ -2016,6 +2290,77 @@ NTSTATUS wow64_ext_glGetNamedBufferPointervEXT( void *args )
 {
     return wow64_gl_get_named_buffer_pointer_v( args, ext_glGetNamedBufferPointervEXT );
 }
+
+#ifdef __APPLE__
+static pthread_once_t zero_bits_once = PTHREAD_ONCE_INIT;
+static ULONG_PTR zero_bits = 0x7fffffff;
+static void init_zero_bits(void)
+{
+    /* Set zero_bits appropriately if EXE is large-address-aware.
+     * See process_init() in dlls/wow64/syscall.c
+     */
+    SYSTEM_BASIC_INFORMATION info;
+
+    NtQuerySystemInformation( SystemEmulationBasicInformation, &info, sizeof(info), NULL );
+    zero_bits = (ULONG_PTR)info.HighestUserAddress | 0x7fffffff;
+}
+
+static void *remap_memory(TEB *teb, void *hostaddr, GLint size, GLenum target, BOOL readonly)
+{
+    struct wgl_handle *ptr = get_current_context_ptr( teb );
+    struct opengl_context *current = ptr->u.context;
+    const struct opengl_funcs *funcs = teb->glTable;
+    vm_prot_t cur_protection, max_protection;
+    mach_vm_address_t lowaddr, base;
+    void *mapping = NULL;
+    SIZE_T mapping_size;
+    kern_return_t kr;
+    GLuint buffer;
+
+    TRACE("    host address %p\n", hostaddr);
+    if (!hostaddr) return NULL;
+
+    /* If this pointer is already below 4 GB, we don't need to do anything. */
+    if ((ULONG_PTR)hostaddr < 0x100000000ULL)
+        return hostaddr;
+
+    pthread_once(&zero_bits_once, &init_zero_bits);
+
+    /* Get some low memory, then remap it to the host allocation. */
+    base = (vm_map_address_t)hostaddr & ~PAGE_MASK;
+    mapping_size = (size + ((vm_map_offset_t)hostaddr - base) + PAGE_MASK) & ~PAGE_MASK;
+    TRACE("base host address 0x%08llx, aligned size %zu\n", base, mapping_size);
+
+    if (NtAllocateVirtualMemory(GetCurrentProcess(), &mapping, zero_bits, &mapping_size, MEM_RESERVE,
+                                                    readonly ? PAGE_READONLY : PAGE_READWRITE))
+    {
+        WARN("failed to find low memory to remap to\n");
+        unmap_buffer(teb, target);
+        InterlockedExchange(&current->last_error, GL_OUT_OF_MEMORY);
+        return NULL;
+    }
+
+    lowaddr = (UINT_PTR)mapping;
+    if ((kr = mach_vm_remap(mach_task_self(), &lowaddr, mapping_size, 0, VM_FLAGS_FIXED|VM_FLAGS_OVERWRITE,
+                            mach_task_self(), base, FALSE, &cur_protection, &max_protection,
+                            VM_INHERIT_DEFAULT)) != KERN_SUCCESS)
+    {
+        SIZE_T size = 0;
+
+        WARN("failed to remap memory; Mach error %d\n", kr);
+        NtFreeVirtualMemory(GetCurrentProcess(), &mapping, &size, MEM_RELEASE);
+        unmap_buffer(teb, target);
+        InterlockedExchange(&current->last_error, GL_OUT_OF_MEMORY);
+        return NULL;
+    }
+
+    funcs->gl.p_glGetIntegerv(binding_for_target(target), (GLint *)&buffer);
+    set_mapped_buffer(current->resources->mapped_buffers, buffer, (void *)lowaddr);
+    TRACE("    remapped buffer %u (aligned size %zu) to address 0x%08llx\n", buffer, mapping_size, lowaddr);
+    return (void *)(lowaddr + ((vm_map_offset_t)hostaddr - base));
+
+}
+#endif
 
 static NTSTATUS wow64_gl_map_buffer( void *args, NTSTATUS (*gl_map_buffer64)(void *) )
 {
@@ -2034,6 +2379,14 @@ static NTSTATUS wow64_gl_map_buffer( void *args, NTSTATUS (*gl_map_buffer64)(voi
     };
     NTSTATUS status;
 
+#ifdef __APPLE__
+    GLint size;
+
+    if ((status = gl_map_buffer64( &params ))) return status;
+    size = get_buffer_param( params.teb, params.target, GL_BUFFER_SIZE );
+    params32->ret = (PTR32)(ULONG_PTR)remap_memory(params.teb, params.ret, size, params.target, params.access == GL_READ_ONLY);
+    return STATUS_SUCCESS;
+#else
     /* already mapped, we're being called again with a wow64 pointer */
     if (params32->ret) params.ret = get_buffer_pointer( params.teb, params.target );
     else if ((status = gl_map_buffer64( &params ))) return status;
@@ -2044,6 +2397,7 @@ static NTSTATUS wow64_gl_map_buffer( void *args, NTSTATUS (*gl_map_buffer64)(voi
 
     unmap_buffer( params.teb, params.target );
     return status;
+#endif
 }
 
 NTSTATUS wow64_ext_glMapBuffer( void *args )
@@ -2077,6 +2431,11 @@ NTSTATUS wow64_ext_glMapBufferRange( void *args )
     };
     NTSTATUS status;
 
+#ifdef __APPLE__
+    if ((status = ext_glMapBufferRange( &params ))) return status;
+    params32->ret = (PTR32)(ULONG_PTR)remap_memory(params.teb, params.ret, params.length, params.target, !(params.access & GL_MAP_WRITE_BIT));
+    return STATUS_SUCCESS;
+#else
     /* already mapped, we're being called again with a wow64 pointer */
     if (params32->ret) params.ret = (char *)get_buffer_pointer( params.teb, params.target );
     else if ((status = ext_glMapBufferRange( &params ))) return status;
@@ -2086,6 +2445,7 @@ NTSTATUS wow64_ext_glMapBufferRange( void *args )
 
     unmap_buffer( params.teb, params.target );
     return status;
+#endif
 }
 
 static NTSTATUS wow64_gl_map_named_buffer( void *args, NTSTATUS (*gl_map_named_buffer64)(void *) )
@@ -2105,6 +2465,9 @@ static NTSTATUS wow64_gl_map_named_buffer( void *args, NTSTATUS (*gl_map_named_b
     };
     NTSTATUS status;
 
+#ifdef __APPLE__
+    FIXME("macOS memory remap hack not implemented for this API\n");
+#endif
     /* already mapped, we're being called again with a wow64 pointer */
     if (params32->ret) params.ret = get_named_buffer_pointer( params.teb, params.buffer );
     else if ((status = gl_map_named_buffer64( &params ))) return status;
@@ -2148,6 +2511,9 @@ static NTSTATUS wow64_gl_map_named_buffer_range( void *args, NTSTATUS (*gl_map_n
     };
     NTSTATUS status;
 
+#ifdef __APPLE__
+    FIXME("macOS memory remap hack not implemented for this GL API\n");
+#endif
     /* already mapped, we're being called again with a wow64 pointer */
     if (params32->ret) params.ret = get_named_buffer_pointer( params.teb, params.buffer );
     else if ((status = gl_map_named_buffer_range64( &params ))) return status;
@@ -2171,7 +2537,6 @@ NTSTATUS wow64_ext_glMapNamedBufferRangeEXT( void *args )
 
 static NTSTATUS wow64_gl_unmap_buffer( void *args, NTSTATUS (*gl_unmap_buffer64)(void *) )
 {
-    PTR32 *ptr;
     struct
     {
         PTR32 teb;
@@ -2186,6 +2551,24 @@ static NTSTATUS wow64_gl_unmap_buffer( void *args, NTSTATUS (*gl_unmap_buffer64)
     };
     NTSTATUS status;
 
+#ifdef __APPLE__
+    struct wgl_handle *handle_ptr = get_current_context_ptr( params.teb );
+    struct opengl_context *current = handle_ptr->u.context;
+    const struct opengl_funcs *funcs = params.teb->glTable;
+    GLuint buffer;
+
+    TRACE("target 0x%04x\n", params.target);
+
+    funcs->gl.p_glGetIntegerv(binding_for_target(params.target), (GLint *)&buffer);
+    free_mapped_buffer(current, buffer);
+
+    status = gl_unmap_buffer64( &params );
+    params32->ret = params.ret;
+
+    return status;
+#else
+    PTR32 *ptr;
+
     if (!(ptr = get_buffer_pointer( params.teb, params.target ))) return STATUS_SUCCESS;
 
     status = wow64_unmap_buffer( ptr, get_buffer_param( params.teb, params.target, GL_BUFFER_MAP_LENGTH ),
@@ -2194,6 +2577,7 @@ static NTSTATUS wow64_gl_unmap_buffer( void *args, NTSTATUS (*gl_unmap_buffer64)
     params32->ret = params.ret;
 
     return status;
+#endif
 }
 
 NTSTATUS wow64_ext_glUnmapBuffer( void *args )
@@ -2223,6 +2607,9 @@ static NTSTATUS wow64_gl_unmap_named_buffer( void *args, NTSTATUS (*gl_unmap_nam
     };
     NTSTATUS status;
 
+#ifdef __APPLE__
+    FIXME("macOS memory remap hack not implemented for this GL API\n");
+#endif
     if (!(ptr = get_named_buffer_pointer( params.teb, params.buffer ))) return STATUS_SUCCESS;
 
     status = wow64_unmap_buffer( ptr, get_named_buffer_param( params.teb, params.buffer, GL_BUFFER_MAP_LENGTH ),

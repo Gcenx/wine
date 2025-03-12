@@ -80,6 +80,12 @@ WINE_DECLARE_DEBUG_CHANNEL(seh);
 
 #include "dwarf.h"
 
+#ifdef __APPLE__
+/* CW Hack 24256 */
+#include <sys/sysctl.h>
+static BOOL is_rosetta2;
+#endif
+
 /***********************************************************************
  * signal context platform-specific definitions
  */
@@ -447,6 +453,9 @@ struct amd64_thread_data
     DWORD                 xstate_features_size;  /* 033c */
     UINT64                xstate_features_mask;  /* 0340 */
     void                **instrumentation_callback; /* 0348 */
+#ifdef __APPLE__  /* CW Hack 24265 */
+    DWORD                 mxcsr;         /* 350 */
+#endif
 };
 
 C_ASSERT( sizeof(struct amd64_thread_data) <= sizeof(((struct ntdll_thread_data *)0)->cpu_data) );
@@ -456,6 +465,9 @@ C_ASSERT( offsetof( TEB, GdiTebBatch ) + offsetof( struct amd64_thread_data, sys
 C_ASSERT( offsetof( TEB, GdiTebBatch ) + offsetof( struct amd64_thread_data, fs ) == 0x338 );
 C_ASSERT( offsetof( TEB, GdiTebBatch ) + offsetof( struct amd64_thread_data, xstate_features_size ) == 0x33c );
 C_ASSERT( offsetof( TEB, GdiTebBatch ) + offsetof( struct amd64_thread_data, xstate_features_mask ) == 0x340 );
+#ifdef __APPLE__  /* CW Hack 24265 */
+C_ASSERT( offsetof( TEB, GdiTebBatch ) + offsetof( struct amd64_thread_data, mxcsr ) == 0x350 );
+#endif
 
 static inline struct amd64_thread_data *amd64_thread_data(void)
 {
@@ -919,6 +931,13 @@ static void save_context( struct xcontext *xcontext, const ucontext_t *sigcontex
 
         context->ContextFlags |= CONTEXT_FLOATING_POINT;
         context->FltSave = *FPU_sig(sigcontext);
+#ifdef __APPLE__
+        /* CW Hack 24256: mxcsr in signal contexts is incorrect in Rosetta.
+           In Rosetta only, the actual value of the register from within the
+           handler is correct (on Intel it has some default value). */
+        if (is_rosetta2)
+            __asm__ volatile( "stmxcsr %0" : "=m" (context->FltSave.MxCsr) );
+#endif
         context->MxCsr = context->FltSave.MxCsr;
         if (xstate_extended_features() && (xs = XState_sig(FPU_sig(sigcontext))))
         {
@@ -1023,7 +1042,11 @@ NTSTATUS WINAPI NtSetContextThread( HANDLE handle, const CONTEXT *context )
         ret = set_thread_context( handle, context, &self, IMAGE_FILE_MACHINE_AMD64 );
 #ifdef __APPLE__
         if ((flags & CONTEXT_DEBUG_REGISTERS) && (ret == STATUS_UNSUCCESSFUL))
-            WARN_(seh)( "Setting debug registers is not supported under Rosetta\n" );
+        {
+            /* CW HACK 22131 */
+            WARN_(seh)( "Setting debug registers is not supported under Rosetta, faking success\n" );
+            ret = STATUS_SUCCESS;
+        }
 #endif
         if (ret || !self) return ret;
         if (flags & CONTEXT_DEBUG_REGISTERS)
@@ -1236,6 +1259,14 @@ NTSTATUS set_thread_wow64_context( HANDLE handle, const void *ctx, ULONG size )
     if (!self)
     {
         NTSTATUS ret = set_thread_context( handle, context, &self, IMAGE_FILE_MACHINE_I386 );
+#ifdef __APPLE__
+        if ((flags & CONTEXT_DEBUG_REGISTERS) && (ret == STATUS_UNSUCCESSFUL))
+        {
+            /* CW HACK 22131 */
+            WARN_(seh)( "Setting debug registers is not supported under Rosetta, faking success\n" );
+            ret = STATUS_SUCCESS;
+        }
+#endif
         if (ret || !self) return ret;
         if (flags & CONTEXT_I386_DEBUG_REGISTERS)
         {
@@ -1742,6 +1773,70 @@ NTSTATUS WINAPI NtCallbackReturn( void *ret_ptr, ULONG ret_len, NTSTATUS status 
     user_mode_callback_return( ret_ptr, ret_len, status, NtCurrentTeb() );
 }
 
+#ifdef __APPLE__
+/***********************************************************************
+ *           handle_cet_nop
+ *
+ * Check if the fault location is an Intel CET instruction that should be treated as a NOP.
+ * Rosetta on Big Sur throws an exception for this, but is fixed in Monterey.
+ * CW HACK 20186
+ */
+static inline BOOL handle_cet_nop( ucontext_t *sigcontext, CONTEXT *context )
+{
+    BYTE instr[16];
+    unsigned int i, prefix_count = 0;
+    unsigned int len = virtual_uninterrupted_read_memory( (BYTE *)context->Rip, instr, sizeof(instr) );
+
+    for (i = 0; i < len; i++) switch (instr[i])
+    {
+    /* instruction prefixes */
+    case 0x2e:  /* %cs: */
+    case 0x36:  /* %ss: */
+    case 0x3e:  /* %ds: */
+    case 0x26:  /* %es: */
+    case 0x40:  /* rex */
+    case 0x41:  /* rex */
+    case 0x42:  /* rex */
+    case 0x43:  /* rex */
+    case 0x44:  /* rex */
+    case 0x45:  /* rex */
+    case 0x46:  /* rex */
+    case 0x47:  /* rex */
+    case 0x48:  /* rex */
+    case 0x49:  /* rex */
+    case 0x4a:  /* rex */
+    case 0x4b:  /* rex */
+    case 0x4c:  /* rex */
+    case 0x4d:  /* rex */
+    case 0x4e:  /* rex */
+    case 0x4f:  /* rex */
+    case 0x64:  /* %fs: */
+    case 0x65:  /* %gs: */
+    case 0x66:  /* opcode size */
+    case 0x67:  /* addr size */
+    case 0xf0:  /* lock */
+    case 0xf2:  /* repne */
+    case 0xf3:  /* repe */
+        if (++prefix_count >= 15) return FALSE;
+        continue;
+
+    case 0x0f: /* extended instruction */
+        if (i == len - 1) return 0;
+        switch (instr[i + 1])
+        {
+        case 0x1E:
+            /* RDSSPD/RDSSPQ: (prefixes) 0F 1E (modrm) */
+            RIP_sig(sigcontext) += prefix_count + 3;
+            TRACE_(seh)( "skipped RDSSPD/RDSSPQ instruction\n" );
+            return TRUE;
+        }
+        break;
+    default:
+        return FALSE;
+    }
+    return FALSE;
+}
+#endif
 
 /***********************************************************************
  *           is_privileged_instr
@@ -1990,6 +2085,10 @@ static void segv_handler( int signal, siginfo_t *siginfo, void *sigcontext )
         rec.ExceptionCode = EXCEPTION_ARRAY_BOUNDS_EXCEEDED;
         break;
     case TRAP_x86_PRIVINFLT:   /* Invalid opcode exception */
+#ifdef __APPLE__
+        /* CW HACK 20186 */
+        if (handle_cet_nop( ucontext, &context.c )) return;
+#endif
         rec.ExceptionCode = EXCEPTION_ILLEGAL_INSTRUCTION;
         break;
     case TRAP_x86_STKFLT:  /* Stack fault */
@@ -2240,6 +2339,15 @@ static void usr1_handler( int signal, siginfo_t *siginfo, void *sigcontext )
 
 
 #ifdef __APPLE__
+/* CW Hack 24265 */
+extern void __restore_mxcsr_thunk(void);
+__ASM_GLOBAL_FUNC( __restore_mxcsr_thunk,
+                   "pushq %rcx\n\t"
+                   "movq %gs:0x30,%rcx\n\t"
+                   "ldmxcsr 0x350(%rcx)\n\t"  /* amd64_thread_data()->mxcsr */
+                   "popq %rcx\n\t"
+                   "jmp " __ASM_LOCAL_LABEL("__wine_syscall_dispatcher_prolog_end") );
+
 /**********************************************************************
  *		sigsys_handler
  *
@@ -2263,6 +2371,23 @@ static void sigsys_handler( int signal, siginfo_t *siginfo, void *sigcontext )
     R11_sig(ucontext) = frame->eflags;
     EFL_sig(ucontext) &= ~0x100;  /* clear single-step flag */
     RIP_sig(ucontext) = (ULONG64)__wine_syscall_dispatcher_prolog_end_ptr;
+
+    /* CW Hack 24265 */
+    if (is_rosetta2)
+    {
+        unsigned int direct_mxcsr;
+        __asm__ volatile( "stmxcsr %0" : "=m" (direct_mxcsr) );
+        if (direct_mxcsr != FPU_sig(ucontext)->MxCsr)
+        {
+            FPU_sig(ucontext)->MxCsr = direct_mxcsr;
+
+            /* On the M3, Rosetta will restore mxcsr to the initial, incorrect
+               value from the sigcontext, even if we change it. So we jump to a
+               thunk that restores the value from amd64_thread_data. */
+            amd64_thread_data()->mxcsr = direct_mxcsr;
+            RIP_sig(ucontext) = (ULONG64)__restore_mxcsr_thunk;
+        }
+    }
 }
 #endif
 
@@ -2541,6 +2666,19 @@ void signal_init_process(void)
     }
 #endif
 
+#ifdef __APPLE__
+    /* CW Hack 24256: We need the value of sysctl.proc_translated in signal
+       handlers but sysctl[byname] is not signal-safe. */
+    {
+        int ret = 0;
+        size_t size = sizeof(ret);
+        if (sysctlbyname( "sysctl.proc_translated", &ret, &size, NULL, 0 ) == -1)
+            is_rosetta2 = 0;
+        else
+            is_rosetta2 = ret;
+    }
+#endif
+
     sig_act.sa_mask = server_block_set;
     sig_act.sa_flags = SA_SIGINFO | SA_RESTART | SA_ONSTACK;
 
@@ -2599,6 +2737,7 @@ void call_init_thunk( LPTHREAD_START_ROUTINE entry, void *arg, BOOL suspend, TEB
 #elif defined (__APPLE__)
     __asm__ volatile ("movq %0,%%gs:%c1" :: "r" (teb->Tib.Self), "n" (FIELD_OFFSET(TEB, Tib.Self)));
     __asm__ volatile ("movq %0,%%gs:%c1" :: "r" (teb->ThreadLocalStoragePointer), "n" (FIELD_OFFSET(TEB, ThreadLocalStoragePointer)));
+    __asm__ volatile ("movq %0,%%gs:%c1" :: "r" (teb->Peb), "n" (FIELD_OFFSET(TEB, Peb)));
     thread_data->pthread_teb = mac_thread_gsbase();
     /* alloc_tls_slot() needs to poke a value to an address relative to each
        thread's gsbase.  Have each thread record its gsbase pointer into its

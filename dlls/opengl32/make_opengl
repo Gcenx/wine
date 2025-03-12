@@ -197,6 +197,7 @@ my %manual_wow64_thunks =
      "glFenceSync" => 1,
      "glGetBufferPointerv" => 1,
      "glGetBufferPointervARB" => 1,
+     "glGetError" => 1,
      "glGetNamedBufferPointerv" => 1,
      "glGetNamedBufferPointervEXT" => 1,
      "glGetString" => 1,
@@ -229,6 +230,7 @@ my %manual_wow64_thunks =
      "wglMakeCurrent" => 1,
      "wglQueryCurrentRendererStringWINE" => 1,
      "wglQueryRendererStringWINE" => 1,
+     "wglShareLists" => 1,
     );
 my %pointer_array_count =
     (

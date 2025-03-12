@@ -62,6 +62,8 @@
 #if defined(__APPLE__)
 # include <mach/mach_init.h>
 # include <mach/mach_vm.h>
+# include <mach-o/dyld.h> /* CrossOver Hack #16371 */
+# include <sys/utsname.h> /* CrossOver Hack #22011 */
 #endif
 
 #include "ntstatus.h"
@@ -122,6 +124,7 @@ struct file_view
 #define VPROT_GUARD      0x10
 #define VPROT_COMMITTED  0x20
 #define VPROT_WRITEWATCH 0x40
+#define VPROT_COPIED     0x80
 /* per-mapping protection flags */
 #define VPROT_ARM64EC          0x0100  /* view may contain ARM64EC code */
 #define VPROT_SYSTEM           0x0200  /* system view (underlying mmap not under our control) */
@@ -1119,7 +1122,8 @@ static const char *get_prot_str( BYTE prot )
     buffer[0] = (prot & VPROT_COMMITTED) ? 'c' : '-';
     buffer[1] = (prot & VPROT_GUARD) ? 'g' : ((prot & VPROT_WRITEWATCH) ? 'H' : '-');
     buffer[2] = (prot & VPROT_READ) ? 'r' : '-';
-    buffer[3] = (prot & VPROT_WRITECOPY) ? 'W' : ((prot & VPROT_WRITE) ? 'w' : '-');
+    buffer[3] = (prot & VPROT_WRITECOPY) ? (prot & VPROT_COPIED ? 'w' : 'W')
+        : ((prot & VPROT_WRITE) ? 'w' : '-');
     buffer[4] = (prot & VPROT_EXEC) ? 'x' : '-';
     buffer[5] = 0;
     return buffer;
@@ -1646,7 +1650,11 @@ static NTSTATUS create_view( struct file_view **view_ret, void *base, size_t siz
  */
 static DWORD get_win32_prot( BYTE vprot, unsigned int map_prot )
 {
-    DWORD ret = VIRTUAL_Win32Flags[vprot & 0x0f];
+    DWORD ret;
+
+    if ((vprot & (VPROT_COPIED | VPROT_WRITECOPY)) == (VPROT_COPIED | VPROT_WRITECOPY))
+        vprot = (vprot & ~VPROT_WRITECOPY) | VPROT_WRITE;
+    ret = VIRTUAL_Win32Flags[vprot & 0x0f];
     if (vprot & VPROT_GUARD) ret |= PAGE_GUARD;
     if (map_prot & SEC_NOCACHE) ret |= PAGE_NOCACHE;
     return ret;
@@ -1742,6 +1750,40 @@ static void mprotect_range( void *base, size_t size, BYTE set, BYTE clear )
         count = 0;
     }
     if (count) mprotect_exec( addr, count << page_shift, prot );
+}
+
+#ifdef __APPLE__
+static BOOL is_catalina_or_later(void)
+{
+    static int result = -1;
+    struct utsname name;
+    unsigned major, minor;
+
+    if (result == -1)
+    {
+        result = (uname(&name) == 0 &&
+                  sscanf(name.release, "%u.%u", &major, &minor) == 2 &&
+                  major >= 19 /* macOS 10.15 Catalina */);
+    }
+    return (result == 1) ? TRUE : FALSE;
+}
+#endif
+
+static void *wine_mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset)
+{
+#if defined(__APPLE__) && defined(__x86_64__)
+    // In Catalina-and-later, mapping files with execute permissions can make
+    // Gatekeeper prompt the user, or just fail outright.
+    if (!(flags & MAP_ANON) && fd >= 0 && prot & PROT_EXEC && is_catalina_or_later())
+    {
+        void *ret = mmap(addr, len, prot & ~PROT_EXEC, flags, fd, offset);
+
+        if (ret != MAP_FAILED && mprotect(ret, len, prot))
+            WARN("failed to mprotect region: %d\n", errno);
+        return ret;
+    }
+#endif
+    return mmap(addr, len, prot, flags, fd, offset);
 }
 
 
@@ -2114,7 +2156,7 @@ static NTSTATUS map_file_into_view( struct file_view *view, int fd, size_t start
     /* only try mmap if media is not removable (or if we require write access) */
     if (!removable || (flags & MAP_SHARED))
     {
-        if (mmap( (char *)view->base + start, size, prot, flags, fd, offset ) != MAP_FAILED)
+        if (wine_mmap( (char *)view->base + start, size, prot, flags, fd, offset ) != MAP_FAILED)
             goto done;
 
         switch (errno)
@@ -2442,7 +2484,7 @@ static NTSTATUS map_pe_header( void *ptr, size_t size, int fd, BOOL *removable )
 
     if (!*removable)
     {
-        if (mmap( ptr, size, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_FIXED|MAP_PRIVATE, fd, 0 ) != MAP_FAILED)
+        if (wine_mmap( ptr, size, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_FIXED|MAP_PRIVATE, fd, 0 ) != MAP_FAILED)
             return STATUS_SUCCESS;
 
         switch (errno)
@@ -2905,7 +2947,7 @@ static NTSTATUS map_image_into_view( struct file_view *view, const WCHAR *filena
             update_arm64ec_ranges( view, nt, dir, &image_info->entry_point );
     }
 #endif
-    if (machine && machine != nt->FileHeader.Machine) return STATUS_NOT_SUPPORTED;
+    if (machine && machine != nt->FileHeader.Machine && !wow64_using_32bit_prefix) return STATUS_NOT_SUPPORTED;
 
     /* relocate to dynamic base */
 
@@ -3095,7 +3137,8 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
         return status;
     }
 
-    if (!image_info->map_addr &&
+    if (peb->OSMajorVersion > 5 && /* CW HACK 22939: ASLR is supported only on Windows Vista and later */
+        !image_info->map_addr &&
         (image_info->image_charact & IMAGE_FILE_DLL) &&
         (image_info->image_flags & IMAGE_FLAGS_ImageDynamicallyRelocated))
     {
@@ -3685,6 +3728,9 @@ static TEB *init_teb( void *ptr, BOOL is_wow )
     teb->StaticUnicodeString.Buffer = teb->StaticUnicodeBuffer;
     teb->StaticUnicodeString.MaximumLength = sizeof(teb->StaticUnicodeBuffer);
     thread_data = (struct ntdll_thread_data *)&teb->GdiTebBatch;
+    thread_data->esync_apc_fd = -1;
+    thread_data->msync_apc_addr = NULL;
+    thread_data->msync_apc_idx = 0;
     thread_data->request_fd = -1;
     thread_data->reply_fd   = -1;
     thread_data->wait_fd[0] = -1;
@@ -3943,7 +3989,7 @@ void virtual_map_user_shared_data(void)
         exit(1);
     }
     if ((res = server_get_unix_fd( section, 0, &fd, &needs_close, NULL, NULL )) ||
-        (user_shared_data != mmap( user_shared_data, page_size, PROT_READ, MAP_SHARED|MAP_FIXED, fd, 0 )))
+        (user_shared_data != wine_mmap( user_shared_data, page_size, PROT_READ, MAP_SHARED|MAP_FIXED, fd, 0 )))
     {
         ERR( "failed to remap the process USD: %d\n", res );
         exit(1);
@@ -4039,6 +4085,17 @@ NTSTATUS virtual_handle_fault( EXCEPTION_RECORD *rec, void *stack )
         WARN( "treating read fault in a readable page as a write fault, addr %p\n", addr );
         err = EXCEPTION_WRITE_FAULT;
     }
+
+    /* CW Hack 24945 */
+    if (err == EXCEPTION_WRITE_FAULT &&
+        ((get_unix_prot( vprot ) & (PROT_WRITE | PROT_EXEC)) == (PROT_WRITE | PROT_EXEC)))
+    {
+        FIXME( "HACK: write fault on a w|x page, addr %p\n", addr );
+        mprotect_range( page, page_size, 0, VPROT_EXEC );
+        mprotect_range( page, page_size, VPROT_EXEC, 0 );
+        ret = STATUS_SUCCESS;
+        goto done;
+    }
 #endif
 
     if (!is_inside_signal_stack( stack ) && (vprot & VPROT_GUARD))
@@ -4075,6 +4132,8 @@ NTSTATUS virtual_handle_fault( EXCEPTION_RECORD *rec, void *stack )
                 ret = STATUS_SUCCESS;
         }
     }
+
+done:
     mutex_unlock( &virtual_mutex );
     rec->ExceptionCode = ret;
     return ret;
@@ -4493,12 +4552,79 @@ static void virtual_release_address_space(void)
 {
 #ifndef __APPLE__  /* On macOS, we still want to free some of low memory, for OpenGL resources */
     if (user_space_limit > (void *)limit_2g) return;
+#else /* CrossOver Hack #16371 */
+    {
+        char buf[1024], *p;
+        uint32_t size = sizeof(buf);
+        if (_NSGetExecutablePath(buf, &size) == 0)
+        {
+            if ((p = strrchr(buf, '/'))) ++p;
+            else p = buf;
+            if (!strcasestr(p, "preloader"))
+            {
+                free_reserved_memory( (char *)0x40001000, (char *)0x7f000000 );
+                return;
+            }
+        }
+    }
 #endif
     free_reserved_memory( (char *)0x20000000, (char *)0x7f000000 );
 }
 
 #endif  /* _WIN64 */
 
+
+/* CROSSOVER HACK: bug 17634 */
+static BOOL force_laa(void)
+{
+    static const WCHAR LargeAddressAwareW[] = {'L','a','r','g','e','A','d','d','r','e','s','s','A','w','a','r','e',0};
+    const char *e = getenv("WINE_LARGE_ADDRESS_AWARE");
+    UNICODE_STRING nameW, valuenameW;
+    HANDLE root, app_key = 0;
+    OBJECT_ATTRIBUTES attr;
+    char tmp[64];
+    KEY_VALUE_PARTIAL_INFORMATION *info = (KEY_VALUE_PARTIAL_INFORMATION *)tmp;
+    DWORD count;
+    BOOL result=FALSE;
+    WCHAR *app_name;
+
+    if ((app_name = ntdll_wcsrchr( main_wargv[0], '\\' ))) app_name++;
+    else app_name = main_wargv[0];
+
+    if ((e != NULL) && (*e != '\0' && *e != '0'))
+        return TRUE;
+
+    if (!open_hkcu_key( "Software\\Wine\\AppDefaults", &root ))
+    {
+        ULONG len = wcslen( app_name ) + 1;
+        nameW.Length = (len - 1) * sizeof(WCHAR);
+        nameW.Buffer = malloc( len * sizeof(WCHAR) );
+        wcscpy( nameW.Buffer, app_name );
+        InitializeObjectAttributes( &attr, &nameW, 0, root, NULL );
+
+        /* @@ Wine registry key: HKCU\Software\Wine\AppDefaults\app.exe */
+        NtOpenKey( &app_key, KEY_ALL_ACCESS, &attr );
+        NtClose( root );
+        free( nameW.Buffer );
+    }
+
+    if (app_key)
+    {
+        valuenameW.Length = sizeof(LargeAddressAwareW) - sizeof(WCHAR);
+        valuenameW.Buffer = (WCHAR*)LargeAddressAwareW;
+        if (!NtQueryValueKey( app_key, &valuenameW, KeyValuePartialInformation, tmp, sizeof(tmp)-1, &count))
+        {
+            if (info->DataLength >= sizeof(DWORD))
+            {
+                if ((*(DWORD *)info->Data) != 0)
+                    result = TRUE;
+            }
+        }
+        NtClose( app_key );
+    }
+
+    return result;
+}
 
 /***********************************************************************
  *           virtual_set_large_address_space
@@ -4507,10 +4633,11 @@ static void virtual_release_address_space(void)
  */
 void virtual_set_large_address_space(void)
 {
+    BOOL large_address_space_active = ((main_image_info.ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE) || force_laa());
     if (is_win64)
     {
         if (is_wow64())
-            user_space_wow_limit = ((main_image_info.ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE) ? limit_4g : limit_2g) - 1;
+            user_space_wow_limit = (large_address_space_active ? limit_4g : limit_2g) - 1;
 #ifndef __APPLE__  /* don't free the zerofill section on macOS */
         else if ((main_image_info.DllCharacteristics & IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA) &&
                  (main_image_info.DllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE))
@@ -4519,7 +4646,7 @@ void virtual_set_large_address_space(void)
     }
     else
     {
-        if (!(main_image_info.ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE)) return;
+        if (!large_address_space_active) return;
         free_reserved_memory( (char *)0x80000000, address_space_limit );
     }
     user_space_limit = working_set_limit = address_space_limit;
@@ -4997,6 +5124,16 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T 
         {
             old = get_win32_prot( vprot, view->protect );
             status = set_protection( view, base, size, new_prot );
+
+            if (simulate_writecopy && status == STATUS_SUCCESS
+                && ((old == PAGE_WRITECOPY || old == PAGE_EXECUTE_WRITECOPY)))
+            {
+                TRACE("Setting VPROT_COPIED.\n");
+
+                set_page_vprot_bits(base, size, VPROT_COPIED, 0);
+                vprot |= VPROT_COPIED;
+                old = get_win32_prot( vprot, view->protect );
+            }
         }
         else status = STATUS_NOT_COMMITTED;
     }
@@ -6124,6 +6261,56 @@ NTSTATUS WINAPI NtReadVirtualMemory( HANDLE process, const void *addr, void *buf
     return status;
 }
 
+#ifdef __APPLE__
+static int is_apple_silicon(void)
+{
+    static int apple_silicon_status, did_check = 0;
+    if (!did_check)
+    {
+        /* returns 0 for native process or on error, 1 for translated */
+        int ret = 0;
+        size_t size = sizeof(ret);
+        if (sysctlbyname( "sysctl.proc_translated", &ret, &size, NULL, 0 ) == -1)
+            apple_silicon_status = 0;
+        else
+            apple_silicon_status = ret;
+
+        did_check = 1;
+    }
+
+    return apple_silicon_status;
+}
+
+/* CW HACK 18947
+ * If mach_vm_write() is used to modify code cross-process (which is how we implement
+ * NtWriteVirtualMemory), Rosetta won't notice the change and will execute the "old" code.
+ *
+ * To work around this, after the write completes,
+ * toggle the executable bit (from inside the target process) on/off for any executable
+ * pages that were modified, to force Rosetta to re-translate it.
+ */
+static void toggle_executable_pages_for_rosetta( HANDLE process, void *addr, SIZE_T size )
+{
+    MEMORY_BASIC_INFORMATION info;
+    NTSTATUS status;
+    SIZE_T ret;
+
+    if (!is_apple_silicon())
+        return;
+
+    status = NtQueryVirtualMemory( process, addr, MemoryBasicInformation, &info, sizeof(info), &ret );
+
+    if (!status && (info.AllocationProtect & 0xf0))
+    {
+        DWORD origprot, noexec;
+        noexec = info.AllocationProtect & ~0xf0;
+        if (!noexec) noexec = PAGE_NOACCESS;
+
+        NtProtectVirtualMemory( process, &addr, &size, noexec, &origprot );
+        NtProtectVirtualMemory( process, &addr, &size, origprot, &noexec );
+    }
+}
+#endif
 
 /***********************************************************************
  *             NtWriteVirtualMemory   (NTDLL.@)
@@ -6144,6 +6331,10 @@ NTSTATUS WINAPI NtWriteVirtualMemory( HANDLE process, void *addr, const void *bu
             if ((status = wine_server_call( req ))) size = 0;
         }
         SERVER_END_REQ;
+
+#ifdef __APPLE__
+        toggle_executable_pages_for_rosetta( process, addr, size );
+#endif
     }
     else
     {
