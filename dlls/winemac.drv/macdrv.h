@@ -188,6 +188,9 @@ struct macdrv_win_data
     unsigned int        per_pixel_alpha : 1;    /* is window using per-pixel alpha? */
     unsigned int        minimized : 1;          /* is window minimized? */
     unsigned int        fullscreen : 1;         /* is the window visible rect fullscreen? (unrelated to native AppKit/Cocoa fullscreen) */
+
+    /* CW HACK 22435 */
+    CFMutableArrayRef   d3dmetal_client_surfaces;
 };
 
 struct macdrv_client_surface

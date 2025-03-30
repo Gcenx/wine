@@ -32,6 +32,7 @@
 #import "cocoa_app.h"
 #import "cocoa_event.h"
 #import "cocoa_opengl.h"
+#import "d3dmetal_objc.h" /* CW HACK 22435 */
 
 #pragma GCC diagnostic ignored "-Wdeclaration-after-statement"
 
@@ -374,6 +375,8 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
     int backingSize[2];
 
     WineMetalView *_metalView;
+
+@public void *d3dmetal_client_surface;   /* CW HACK 22435 */
 }
 
 @property (readonly, nonatomic) BOOL everHadGLContext;
@@ -979,7 +982,7 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
 
     - (CALayer*) makeBackingLayer
     {
-        CAMetalLayer *layer = [CAMetalLayer layer];
+        CAMetalLayer *layer = [WineMetalLayer layer];   /* CW HACK 22435 */
         layer.device = _device;
         layer.framebufferOnly = YES;
         layer.magnificationFilter = kCAFilterNearest;
@@ -3989,6 +3992,23 @@ void macdrv_set_view_backing_size(macdrv_view v, const int backing_size[2])
 
     if ([view isKindOfClass:[WineContentView class]])
         [view wine_setBackingSize:backing_size];
+}
+
+/* CW HACK 22435 */
+void *macdrv_get_view_d3dmetal_client_surface(macdrv_view v)
+{
+    WineContentView* view = (WineContentView*)v;
+
+    if ([view isKindOfClass:[WineContentView class]])
+        return view->d3dmetal_client_surface;
+    return NULL;
+}
+void macdrv_set_view_d3dmetal_client_surface(macdrv_view v, void *client_surface)
+{
+    WineContentView* view = (WineContentView*)v;
+
+    if ([view isKindOfClass:[WineContentView class]])
+        view->d3dmetal_client_surface = client_surface;
 }
 
 /***********************************************************************
