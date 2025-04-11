@@ -274,6 +274,7 @@ W32KAPI void client_surface_release( struct client_surface *surface );
 W32KAPI void client_surface_present( struct client_surface *surface );
 W32KAPI void client_surface_update( struct client_surface *surface );
 W32KAPI void detach_client_surfaces( HWND hwnd );
+W32KAPI void add_window_client_surface( HWND hwnd, struct client_surface *surface );
 
 static inline const char *debugstr_client_surface( struct client_surface *surface )
 {

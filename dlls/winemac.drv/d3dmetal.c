@@ -133,6 +133,7 @@ static struct d3dmetal_macdrv_win_data *my_get_win_data(HWND hwnd)
     d3dm_data->client_cocoa_view = client_surface->cocoa_view;
     d3dm_data->padding[0] = data;
 
+    add_window_client_surface( hwnd, client_surface ); /* CX HACK 23950 */
     return d3dm_data;
 }
 
