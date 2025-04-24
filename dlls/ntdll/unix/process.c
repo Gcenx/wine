@@ -886,7 +886,6 @@ static NTSTATUS spawn_process( const RTL_USER_PROCESS_PARAMETERS *params, int so
                 image_path_name_a = argv[2];
 
             /* CW Hack 24717: Promote specially prefixed PE variables into the Unix environment. */
-#ifdef __APPLE__
             {
                 static const WCHAR cx_unixW[] = {'_','_','C','X','_','U','N','I','X','_',0};
                 const WCHAR *ptr = params->Environment;
@@ -909,7 +908,6 @@ static NTSTATUS spawn_process( const RTL_USER_PROCESS_PARAMETERS *params, int so
                     ptr += wcslen(ptr) + 1;
                 }
             }
-#endif
 
         /* CW Hack 24560: Don't advertise Vulkan extensions for Path of Exile 2 */
 #ifdef __APPLE__
