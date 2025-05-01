@@ -1576,6 +1576,7 @@ enable_winegstreamer
 enable_winehid_sys
 enable_winemac_drv
 enable_winemapi
+enable_winemetal
 enable_wineoss_drv
 enable_wineps_drv
 enable_winepulse_drv
@@ -24303,6 +24304,7 @@ wine_fn_config_makefile dlls/winegstreamer enable_winegstreamer
 wine_fn_config_makefile dlls/winehid.sys enable_winehid_sys
 wine_fn_config_makefile dlls/winemac.drv enable_winemac_drv
 wine_fn_config_makefile dlls/winemapi enable_winemapi
+wine_fn_config_makefile dlls/winemetal enable_winemetal
 wine_fn_config_makefile dlls/wineoss.drv enable_wineoss_drv
 wine_fn_config_makefile dlls/wineps.drv enable_wineps_drv
 wine_fn_config_makefile dlls/wineps16.drv16 enable_win16
