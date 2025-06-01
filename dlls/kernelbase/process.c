@@ -502,6 +502,16 @@ done:
 
 static const WCHAR *hack_append_command_line( const WCHAR *cmd, const WCHAR *cmd_line )
 {
+    /* CROSSOVER HACK: bug 13322 (winehq bug 39403)
+     * Insert --no-sandbox in command line of Steam's web helper process to
+     * work around rendering problems.
+     * CROSSOVER HACK: bug 17315
+     * Insert --in-process-gpu in command line of Steam's web helper process to
+     * work around page rendering problems.
+     * CROSSOVER HACK: bug 21883
+     * Insert --disable-gpu as well.
+     */
+
     static const struct
     {
         const WCHAR *exe_name;
@@ -511,6 +521,7 @@ static const WCHAR *hack_append_command_line( const WCHAR *cmd, const WCHAR *cmd
     }
     options[] =
     {
+        {L"steamwebhelper.exe", L" --no-sandbox --in-process-gpu --disable-gpu", NULL, L"--type=crashpad-handler"},
     };
     unsigned int i;
 
