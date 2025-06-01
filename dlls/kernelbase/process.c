@@ -500,6 +500,35 @@ done:
     return ret;
 }
 
+static const WCHAR *hack_append_command_line( const WCHAR *cmd, const WCHAR *cmd_line )
+{
+    static const struct
+    {
+        const WCHAR *exe_name;
+        const WCHAR *append;
+        const WCHAR *required_args;
+        const WCHAR *forbidden_args;
+    }
+    options[] =
+    {
+    };
+    unsigned int i;
+
+    if (!cmd) return NULL;
+
+    for (i = 0; i < ARRAY_SIZE(options); ++i)
+    {
+        if (wcsstr( cmd, options[i].exe_name )
+            && (!options[i].required_args || wcsstr(cmd_line, options[i].required_args))
+            && (!options[i].forbidden_args || !wcsstr(cmd_line, options[i].forbidden_args)))
+        {
+            FIXME( "HACK: appending %s to command line.\n", debugstr_w(options[i].append) );
+            return options[i].append;
+        }
+    }
+    return NULL;
+}
+
 /**********************************************************************
  *           CreateProcessInternalW   (kernelbase.@)
  */
@@ -516,6 +545,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH CreateProcessInternalW( HANDLE token, const WCHAR 
     RTL_USER_PROCESS_PARAMETERS *params = NULL;
     RTL_USER_PROCESS_INFORMATION rtl_info = { 0 };
     HANDLE parent = 0, debug = 0;
+    const WCHAR *append;
     ULONG nt_flags = 0;
     USHORT machine = 0;
     NTSTATUS status;
@@ -540,6 +570,20 @@ BOOL WINAPI DECLSPEC_HOTPATCH CreateProcessInternalW( HANDLE token, const WCHAR 
         if (!(tidy_cmdline = get_file_name( cmd_line, name, ARRAY_SIZE(name) ))) return FALSE;
         app_name = name;
     }
+
+    /* CROSSOVER HACK */
+    if ((append = hack_append_command_line( app_name, tidy_cmdline )))
+    {
+        WCHAR *new_cmdline = RtlAllocateHeap( GetProcessHeap(), 0,
+                                              sizeof(WCHAR) * (lstrlenW(cmd_line) + lstrlenW(append) + 1) );
+        lstrcpyW(new_cmdline, tidy_cmdline);
+        lstrcatW(new_cmdline, append);
+        if (tidy_cmdline != cmd_line) RtlFreeHeap( GetProcessHeap(), 0, tidy_cmdline );
+        tidy_cmdline = new_cmdline;
+    }
+    /* end CROSSOVER HACK */
+
+    TRACE( "app %s cmdline %s after all hacks\n", debugstr_w(app_name), debugstr_w(tidy_cmdline) );
 
     /* Warn if unsupported features are used */
 
