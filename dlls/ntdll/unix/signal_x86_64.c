@@ -1159,7 +1159,11 @@ NTSTATUS WINAPI NtSetContextThread( HANDLE handle, const CONTEXT *context )
         ret = set_thread_context( handle, context, &self, IMAGE_FILE_MACHINE_AMD64 );
 #ifdef __APPLE__
         if ((flags & CONTEXT_DEBUG_REGISTERS) && (ret == STATUS_UNSUCCESSFUL))
-            WARN_(seh)( "Setting debug registers is not supported under Rosetta\n" );
+        {
+            /* CW HACK 22131 */
+            WARN_(seh)( "Setting debug registers is not supported under Rosetta, faking success\n" );
+            ret = STATUS_SUCCESS;
+        }
 #endif
         if (ret || !self) return ret;
         if (flags & CONTEXT_DEBUG_REGISTERS)
@@ -1382,6 +1386,14 @@ NTSTATUS set_thread_wow64_context( HANDLE handle, const void *ctx, ULONG size )
     if (!self)
     {
         NTSTATUS ret = set_thread_context( handle, context, &self, IMAGE_FILE_MACHINE_I386 );
+#ifdef __APPLE__
+        if ((flags & CONTEXT_DEBUG_REGISTERS) && (ret == STATUS_UNSUCCESSFUL))
+        {
+            /* CW HACK 22131 */
+            WARN_(seh)( "Setting debug registers is not supported under Rosetta, faking success\n" );
+            ret = STATUS_SUCCESS;
+        }
+#endif
         if (ret || !self) return ret;
         if (flags & CONTEXT_I386_DEBUG_REGISTERS)
         {
