@@ -70,6 +70,23 @@ static BOOL is_main_quicken_window(HWND hwnd)
     return !wcscmp(class, qframeW);
 }
 
+/* CrossOver Hack #23971 */
+static BOOL is_hoyoplay(void)
+{
+    static const WCHAR hoyoplayW[] = {'H','Y','P','.','e','x','e',0};
+    static int is_hoyoplay_exe = -1;
+    WCHAR *name, *module_exe;
+
+    if (is_hoyoplay_exe == -1)
+    {
+        name = NtCurrentTeb()->Peb->ProcessParameters->ImagePathName.Buffer;
+        module_exe = wcsrchr(name, '\\');
+        module_exe = module_exe ? module_exe + 1 : name;
+
+        is_hoyoplay_exe = !wcsicmp(module_exe, hoyoplayW);
+    }
+    return is_hoyoplay_exe;
+}
 
 /* per-monitor DPI aware NtUserSetWindowPos call */
 static BOOL set_window_pos(HWND hwnd, HWND after, INT x, INT y, INT cx, INT cy, UINT flags)
@@ -92,11 +109,17 @@ static struct macdrv_window_features get_window_features_for_style(DWORD style, 
         wf.shadow = TRUE;
         if (!shaped)
         {
-            wf.title_bar = TRUE;
-            if (style & WS_SYSMENU) wf.close_button = TRUE;
-            if (style & WS_MINIMIZEBOX) wf.minimize_button = TRUE;
-            if (style & WS_MAXIMIZEBOX) wf.maximize_button = TRUE;
-            if (ex_style & WS_EX_TOOLWINDOW) wf.utility = TRUE;
+            /* CrossOver Hack #23971 */
+            if (is_hoyoplay())
+                wf.title_bar = FALSE;
+            else
+            {
+                wf.title_bar = TRUE;
+                if (style & WS_SYSMENU) wf.close_button = TRUE;
+                if (style & WS_MINIMIZEBOX) wf.minimize_button = TRUE;
+                if (style & WS_MAXIMIZEBOX) wf.maximize_button = TRUE;
+                if (ex_style & WS_EX_TOOLWINDOW) wf.utility = TRUE;
+            }
         }
     }
     if (style & WS_THICKFRAME)

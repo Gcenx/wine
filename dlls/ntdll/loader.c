@@ -3068,6 +3068,21 @@ static void apply_binary_patches( WINE_MODREF* wm )
         0x89, 0x46, 0x3c                /* mov dword ptr [esi+0x3c], eax */
     };
     C_ASSERT( sizeof(before_cmd_line_args_111_2_7) == sizeof(after_cmd_line_args_111_2_7) );
+
+    static const char before_cmd_line_args_135_0_20[] = {
+        0x8b, 0x47, 0x34,
+        0x89, 0x46, 0x34,
+        0x8b, 0x47, 0x38,               /* mov eax, dword ptr [edi+0x38] */
+        0x89, 0x46, 0x38                /* mov dword ptr [esi+0x38], eax */
+    };
+    static const char after_cmd_line_args_135_0_20[] = {
+        0x8b, 0x47, 0x34,
+        0x89, 0x46, 0x34,
+        0x31, 0xc0,                     /* xor eax, eax */
+        0x90,                           /* nop */
+        0x89, 0x46, 0x38                /* mov dword ptr [esi+0x38], eax */
+    };
+    C_ASSERT( sizeof(before_cmd_line_args_135_0_20) == sizeof(after_cmd_line_args_135_0_20) );
 #endif  /* __i386__ */
 
 
@@ -3226,6 +3241,19 @@ static void apply_binary_patches( WINE_MODREF* wm )
             after_cmd_line_args_111_2_7,
             sizeof(before_cmd_line_args_111_2_7),
             0x114a43,
+            TRUE
+        },
+
+        /* CW HACK 25737:
+           32-bit libcef 135.0.20+ge7de5c3+chromium-135.0.7049.85.
+           For command_line_args_disabled in an updated Ubisoft Connect. */
+        {
+            L"libcef.dll",
+            "CEF cmd_line_args_disabled x86 135.0.20",
+            before_cmd_line_args_135_0_20,
+            after_cmd_line_args_135_0_20,
+            sizeof(before_cmd_line_args_135_0_20),
+            0x11e92d,
             TRUE
         },
 #endif  /* __i386__ */
@@ -4326,7 +4354,7 @@ void* WINAPI LdrResolveDelayLoadedAPI( void* base, const IMAGE_DELAYLOAD_DESCRIP
     HMODULE *phmod;
     NTSTATUS nts;
     FARPROC fp;
-    DWORD id;
+    INT_PTR id;
 
     TRACE( "(%p, %p, %p, %p, %p, 0x%08lx)\n", base, desc, dllhook, syshook, addr, flags );
 
