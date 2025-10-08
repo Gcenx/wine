@@ -1015,6 +1015,7 @@ This is an error since --enable-archs=$wine_arch was requested.])])
     WINE_TRY_PE_CFLAGS([-Wlogical-op])
     WINE_TRY_PE_CFLAGS([-Wabsolute-value])
     WINE_TRY_PE_CFLAGS([-Wenum-conversion])
+    WINE_TRY_PE_CFLAGS([-std=gnu17])
 
     case $wine_arch in
       i386) WINE_TRY_PE_CFLAGS([-fno-omit-frame-pointer])
