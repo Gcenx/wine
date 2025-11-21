@@ -100,6 +100,10 @@ WINE_DECLARE_DEBUG_CHANNEL(seh);
 #include "dwarf.h"
 
 #ifdef __APPLE__
+/* CW Hack 24256 */
+#include <sys/sysctl.h>
+static BOOL is_rosetta2;
+
 /* CW Hack 23427 */
 static BOOL sequoia_or_later = FALSE;
 #endif
@@ -1024,6 +1028,13 @@ static void save_context( struct xcontext *xcontext, const ucontext_t *sigcontex
 
         context->ContextFlags |= CONTEXT_FLOATING_POINT;
         memcpy( &context->FltSave, FPU_sig(sigcontext), sizeof(context->FltSave) );
+#ifdef __APPLE__
+        /* CW Hack 24256: mxcsr in signal contexts is incorrect in Rosetta.
+           In Rosetta only, the actual value of the register from within the
+           handler is correct (on Intel it has some default value). */
+        if (is_rosetta2)
+            __asm__ volatile( "stmxcsr %0" : "=m" (context->FltSave.MxCsr) );
+#endif
         context->MxCsr = context->FltSave.MxCsr;
         if (xstate_extended_features && (xs = XState_sig(FPU_sig(sigcontext))))
         {
@@ -3169,6 +3180,17 @@ void signal_init_process(void)
     signal_alloc_thread( NtCurrentTeb() );
 
 #ifdef __APPLE__
+    /* CW Hack 24256: We need the value of sysctl.proc_translated in signal
+       handlers but sysctl[byname] is not signal-safe. */
+    {
+        int ret = 0;
+        size_t size = sizeof(ret);
+        if (sysctlbyname( "sysctl.proc_translated", &ret, &size, NULL, 0 ) == -1)
+            is_rosetta2 = 0;
+        else
+            is_rosetta2 = ret;
+    }
+
     /* CW Hack 23427: __builtin_available presumably isn't signal-safe. */
     if (__builtin_available( macOS 15.0, * ))
         sequoia_or_later = TRUE;
