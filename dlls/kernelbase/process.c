@@ -511,6 +511,9 @@ static const WCHAR *hack_append_command_line( const WCHAR *cmd, const WCHAR *cmd
      * CROSSOVER HACK: bug 21883
      * Insert --disable-gpu as well.
      */
+    /* CROSSOVER HACK: bug 19610
+     * Add --in-process-gpu to Battle.net.
+     */
 
     static const struct
     {
@@ -522,6 +525,7 @@ static const WCHAR *hack_append_command_line( const WCHAR *cmd, const WCHAR *cmd
     options[] =
     {
         {L"steamwebhelper.exe", L" --no-sandbox --in-process-gpu --disable-gpu", NULL, L"--type=crashpad-handler"},
+        {L"Battle.net.exe", L" --in-process-gpu --use-gl=swiftshader", NULL, NULL},
     };
     unsigned int i;
 
