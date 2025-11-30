@@ -1413,24 +1413,49 @@ static struct hlsl_ir_node *lower_matrix_swizzles(struct hlsl_ctx *ctx,
     return hlsl_block_add_simple_load(ctx, block, var, &instr->loc);
 }
 
-/* hlsl_ir_index nodes are a parse-time construct used to represent array indexing and struct
- * record access before knowing if they will be used in the lhs of an assignment --in which case
- * they are lowered into a deref-- or as the load of an element within a larger value.
- * For the latter case, this pass takes care of lowering hlsl_ir_indexes into individual
- * hlsl_ir_loads, or individual hlsl_ir_resource_loads, in case the indexing is a
- * resource access. */
-static struct hlsl_ir_node *lower_index_loads(struct hlsl_ctx *ctx,
-        struct hlsl_ir_node *instr, struct hlsl_block *block)
+/* Usually when INDEX nodes are constructed, it's a direct variable load
+ * followed by the INDEX. As described below in lower_index_load(), we know in
+ * that case that the variable in question is unmodified and we can convert the
+ * INDEX to a LOAD of the same variable instead of copying it to a temp.
+ * This function is an unsophisticated heuristic meant to detect this case.
+ *
+ * For various reasons there may be CONSTANT or EXPR instructions between the
+ * two, so we have to search until we find the source node. */
+static bool is_indexed_value_known_unmodified(const struct hlsl_block *block, const struct hlsl_ir_index *index)
 {
+    const struct list *entry = &index->node.entry;
+
+    while ((entry = list_prev(&block->instrs, entry)))
+    {
+        const struct hlsl_ir_node *instr = LIST_ENTRY(entry, struct hlsl_ir_node, entry);
+
+        if (instr == index->val.node)
+            return true;
+
+        switch (instr->type)
+        {
+            case HLSL_IR_CONSTANT:
+            case HLSL_IR_EXPR:
+                break;
+
+            default:
+                return false;
+        }
+    }
+
+    return false;
+}
+
+static struct hlsl_ir_node *lower_index_load(struct hlsl_ctx *ctx, struct hlsl_ir_index *index,
+        struct hlsl_block *block, struct hlsl_block *containing_block)
+{
+    struct hlsl_ir_node *instr = &index->node;
+    const struct hlsl_deref *deref;
     struct hlsl_deref var_deref;
-    struct hlsl_ir_index *index;
     struct hlsl_ir_load *load;
     struct hlsl_ir_node *val;
     struct hlsl_ir_var *var;
 
-    if (instr->type != HLSL_IR_INDEX)
-        return NULL;
-    index = hlsl_ir_index(instr);
     val = index->val.node;
 
     if (hlsl_index_is_resource_access(index))
@@ -1519,11 +1544,46 @@ static struct hlsl_ir_node *lower_index_loads(struct hlsl_ctx *ctx,
         }
     }
 
-    if (!(var = hlsl_new_synthetic_var(ctx, "index-val", val->data_type, &instr->loc)))
-        return NULL;
-    hlsl_init_simple_deref_from_var(&var_deref, var);
+    /* Indexed values don't have to be variable loads, but a LOAD must be of a
+     * variable, so we may need to copy the indexed value to a synthetic
+     * variable first.
+     * Even if an INDEX is of a variable load, due to the structure of our IR,
+     * it's legal for that variable to have been modified between the LOAD and
+     * the INDEX. For example, we can have a sequence like:
+     *
+     * 2: x
+     * 3: x = 1
+     * 4: @2[...]
+     *
+     * Because the defined semantics of the IR are essentially "pass by value",
+     * we can't just convert @4 into a LOAD of x. We have to copy it into a
+     * synthetic temp first.
+     *
+     * This situation generally doesn't actually happen with the IR that comes
+     * from parsing, but it can happen in certain cases related to function
+     * calls.
+     *
+     * Always creating an extra copy is fine in theory, since copy propagation
+     * will later undo it. Some of these variables can be extremely large,
+     * however, such that we can observe a noticeable speed improvement by
+     * avoiding the copy in the first place. */
 
-    hlsl_block_add_simple_store(ctx, block, var, val);
+    if (val->type == HLSL_IR_LOAD && is_indexed_value_known_unmodified(containing_block, index))
+    {
+        /* Note that in a chain of indices only the first will be a LOAD.
+         * However, because we convert from top to bottom, and replace as we go,
+         * we should end up catching every index in a chain this way. */
+        deref = &hlsl_ir_load(val)->src;
+    }
+    else
+    {
+        if (!(var = hlsl_new_synthetic_var(ctx, "index-val", val->data_type, &instr->loc)))
+            return NULL;
+        hlsl_init_simple_deref_from_var(&var_deref, var);
+        deref = &var_deref;
+
+        hlsl_block_add_simple_store(ctx, block, var, val);
+    }
 
     if (hlsl_index_is_noncontiguous(index))
     {
@@ -1543,7 +1603,7 @@ static struct hlsl_ir_node *lower_index_loads(struct hlsl_ctx *ctx,
 
             c = hlsl_block_add_uint_constant(ctx, block, i, &instr->loc);
 
-            if (!(load = hlsl_new_load_index(ctx, &var_deref, c, &instr->loc)))
+            if (!(load = hlsl_new_load_index(ctx, deref, c, &instr->loc)))
                 return NULL;
             hlsl_block_add_instr(block, &load->node);
 
@@ -1557,7 +1617,67 @@ static struct hlsl_ir_node *lower_index_loads(struct hlsl_ctx *ctx,
         return hlsl_block_add_simple_load(ctx, block, var, &instr->loc);
     }
 
-    return hlsl_block_add_load_index(ctx, block, &var_deref, index->idx.node, &instr->loc);
+    return hlsl_block_add_load_index(ctx, block, deref, index->idx.node, &instr->loc);
+}
+
+/* hlsl_ir_index nodes are a parse-time construct used to represent array
+ * indexing and struct record access before knowing if they will be used in the
+ * LHS of an assignment—in which case they are lowered into a deref—or as the
+ * load of an element within a larger value.
+ * For the latter case, this pass takes care of lowering hlsl_ir_indexes into
+ * individual hlsl_ir_load or hlsl_ir_resource_load. */
+void hlsl_lower_index_loads(struct hlsl_ctx *ctx, struct hlsl_block *block)
+{
+    struct hlsl_ir_node *instr, *next;
+
+    LIST_FOR_EACH_ENTRY_SAFE(instr, next, &block->instrs, struct hlsl_ir_node, entry)
+    {
+        switch (instr->type)
+        {
+            case HLSL_IR_INDEX:
+            {
+                struct hlsl_ir_node *replacement;
+                struct hlsl_block new_block;
+
+                hlsl_block_init(&new_block);
+                if ((replacement = lower_index_load(ctx, hlsl_ir_index(instr), &new_block, block)))
+                {
+                    list_move_before(&instr->entry, &new_block.instrs);
+                    hlsl_replace_node(instr, replacement);
+                }
+                else
+                {
+                    hlsl_block_cleanup(&new_block);
+                }
+                break;
+            }
+
+            case HLSL_IR_IF:
+            {
+                struct hlsl_ir_if *iff = hlsl_ir_if(instr);
+                hlsl_lower_index_loads(ctx, &iff->then_block);
+                hlsl_lower_index_loads(ctx, &iff->else_block);
+                break;
+            }
+
+            case HLSL_IR_LOOP:
+                hlsl_lower_index_loads(ctx, &hlsl_ir_loop(instr)->body);
+                break;
+
+            case HLSL_IR_SWITCH:
+            {
+                struct hlsl_ir_switch *s = hlsl_ir_switch(instr);
+                struct hlsl_ir_switch_case *c;
+
+                LIST_FOR_EACH_ENTRY(c, &s->cases, struct hlsl_ir_switch_case, entry)
+                    hlsl_lower_index_loads(ctx, &c->body);
+                break;
+            }
+
+            default:
+                break;
+        }
+    }
 }
 
 /* Lower casts from vec1 to vecN to swizzles. */
@@ -6439,8 +6559,9 @@ static void register_deref_usage(struct hlsl_ctx *ctx, const struct hlsl_deref *
     else if (regset == HLSL_REGSET_NUMERIC)
     {
         type = hlsl_deref_get_type(ctx, deref);
+        VKD3D_ASSERT(type->class <= HLSL_CLASS_VECTOR);
 
-        required_bind_count = align(index + type->reg_size[regset], 4) / 4;
+        required_bind_count = align(index + type->e.numeric.dimx, 4) / 4;
         var->bind_count[regset] = max(var->bind_count[regset], required_bind_count);
     }
     else
@@ -7753,6 +7874,10 @@ bool hlsl_regset_index_from_deref(struct hlsl_ctx *ctx, const struct hlsl_deref 
                     *index += 4 * idx;
                     break;
 
+                case HLSL_CLASS_VECTOR:
+                    *index += idx;
+                    break;
+
                 default:
                     vkd3d_unreachable();
             }
@@ -8509,11 +8634,6 @@ static void remove_unreachable_code(struct hlsl_ctx *ctx, struct hlsl_block *bod
 
         break;
     }
-}
-
-void hlsl_lower_index_loads(struct hlsl_ctx *ctx, struct hlsl_block *body)
-{
-    replace_ir(ctx, lower_index_loads, body);
 }
 
 static enum hlsl_ir_expr_op invert_comparison_op(enum hlsl_ir_expr_op op)
@@ -13478,7 +13598,7 @@ static void generate_vsir_descriptors(struct hlsl_ctx *ctx, struct vsir_program 
         }
     }
 
-    program->has_descriptor_info = true;
+    program->normalisation_flags.has_descriptor_info = true;
 }
 
 /* For some reason, for matrices, values from default value initializers end
@@ -14927,7 +15047,7 @@ static void process_entry_function(struct hlsl_ctx *ctx, struct list *semantic_v
 
     replace_ir(ctx, lower_complex_casts, body);
     replace_ir(ctx, lower_matrix_swizzles, body);
-    replace_ir(ctx, lower_index_loads, body);
+    hlsl_lower_index_loads(ctx, body);
 
     replace_ir(ctx, lower_tgsm_loads, body);
     replace_ir(ctx, lower_tgsm_stores, body);

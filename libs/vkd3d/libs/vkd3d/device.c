@@ -109,6 +109,7 @@ static const struct vkd3d_optional_extension_info optional_device_extensions[] =
     VK_EXTENSION(EXT_FRAGMENT_SHADER_INTERLOCK, EXT_fragment_shader_interlock),
     VK_EXTENSION(EXT_MUTABLE_DESCRIPTOR_TYPE, EXT_mutable_descriptor_type),
     VK_EXTENSION(EXT_ROBUSTNESS_2, EXT_robustness2),
+    VK_EXTENSION(EXT_SAMPLER_FILTER_MINMAX, EXT_sampler_filter_minmax),
     VK_EXTENSION(EXT_SHADER_DEMOTE_TO_HELPER_INVOCATION, EXT_shader_demote_to_helper_invocation),
     VK_EXTENSION(EXT_SHADER_STENCIL_EXPORT, EXT_shader_stencil_export),
     VK_EXTENSION(EXT_SHADER_VIEWPORT_INDEX_LAYER, EXT_shader_viewport_index_layer),
@@ -835,6 +836,7 @@ struct vkd3d_physical_device_info
     /* properties */
     VkPhysicalDeviceDescriptorIndexingPropertiesEXT descriptor_indexing_properties;
     VkPhysicalDeviceMaintenance3Properties maintenance3_properties;
+    VkPhysicalDeviceSamplerFilterMinmaxPropertiesEXT filter_minmax_properties;
     VkPhysicalDeviceTexelBufferAlignmentPropertiesEXT texel_buffer_alignment_properties;
     VkPhysicalDeviceTransformFeedbackPropertiesEXT xfb_properties;
     VkPhysicalDeviceVertexAttributeDivisorPropertiesEXT vertex_divisor_properties;
@@ -900,6 +902,8 @@ static void vkd3d_chain_physical_device_info_structures(struct vkd3d_physical_de
         vk_prepend_struct(&info->properties2, &info->maintenance3_properties);
     if (vulkan_info->EXT_descriptor_indexing)
         vk_prepend_struct(&info->properties2, &info->descriptor_indexing_properties);
+    if (vulkan_info->EXT_sampler_filter_minmax)
+        vk_prepend_struct(&info->properties2, &info->filter_minmax_properties);
     if (vulkan_info->EXT_texel_buffer_alignment)
         vk_prepend_struct(&info->properties2, &info->texel_buffer_alignment_properties);
     if (vulkan_info->EXT_transform_feedback)
@@ -936,6 +940,7 @@ static void vkd3d_physical_device_info_init(struct vkd3d_physical_device_info *i
     info->properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
     info->maintenance3_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES;
     info->descriptor_indexing_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES_EXT;
+    info->filter_minmax_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_FILTER_MINMAX_PROPERTIES_EXT;
     info->texel_buffer_alignment_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TEXEL_BUFFER_ALIGNMENT_PROPERTIES_EXT;
     info->xfb_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_PROPERTIES_EXT;
     info->vertex_divisor_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_PROPERTIES_EXT;
@@ -1017,6 +1022,7 @@ static void vkd3d_trace_physical_device_limits(const struct vkd3d_physical_devic
     const VkPhysicalDeviceLimits *limits = &info->properties2.properties.limits;
     const VkPhysicalDeviceDescriptorIndexingPropertiesEXT *descriptor_indexing;
     const VkPhysicalDeviceTexelBufferAlignmentPropertiesEXT *buffer_alignment;
+    const VkPhysicalDeviceSamplerFilterMinmaxPropertiesEXT *minmax;
     const VkPhysicalDeviceMaintenance3Properties *maintenance3;
     const VkPhysicalDeviceTransformFeedbackPropertiesEXT *xfb;
 
@@ -1195,6 +1201,11 @@ static void vkd3d_trace_physical_device_limits(const struct vkd3d_physical_devic
     TRACE("  VkPhysicalDeviceMaintenance3Properties:\n");
     TRACE("    maxPerSetDescriptors: %u.\n", maintenance3->maxPerSetDescriptors);
     TRACE("    maxMemoryAllocationSize: %#"PRIx64".\n", maintenance3->maxMemoryAllocationSize);
+
+    minmax = &info->filter_minmax_properties;
+    TRACE("  VkPhysicalDeviceSamplerFilterMinmaxPropertiesEXT:\n");
+    TRACE("    filterMinmaxSingleComponentFormats: %#x.\n", minmax->filterMinmaxSingleComponentFormats);
+    TRACE("    filterMinmaxImageComponentMapping: %#x.\n", minmax->filterMinmaxImageComponentMapping);
 
     buffer_alignment = &info->texel_buffer_alignment_properties;
     TRACE("  VkPhysicalDeviceTexelBufferAlignmentPropertiesEXT:\n");
@@ -1865,6 +1876,12 @@ static HRESULT vkd3d_init_device_caps(struct d3d12_device *device,
         vulkan_info->KHR_zero_initialize_workgroup_memory = false;
 
     physical_device_info->formats4444_features.formatA4B4G4R4 = VK_FALSE;
+
+    if (!vulkan_info->EXT_sampler_filter_minmax)
+        WARN("Sampler min/max reduction filtering is not supported.\n");
+    else if (!physical_device_info->filter_minmax_properties.filterMinmaxSingleComponentFormats
+            || !physical_device_info->filter_minmax_properties.filterMinmaxImageComponentMapping)
+        WARN("Sampler min/max reduction filtering is only partially supported.");
 
     vulkan_info->texel_buffer_alignment_properties = physical_device_info->texel_buffer_alignment_properties;
 

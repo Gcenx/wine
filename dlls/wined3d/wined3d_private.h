@@ -479,6 +479,7 @@ struct wined3d_settings
     unsigned int multisample_textures;
     unsigned int sample_count;
     unsigned int strict_shader_math;
+    unsigned int multiply_special;
     unsigned int max_sm_vs;
     unsigned int max_sm_hs;
     unsigned int max_sm_ds;

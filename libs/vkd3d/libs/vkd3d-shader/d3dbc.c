@@ -1595,7 +1595,7 @@ int d3dbc_parse(const struct vkd3d_shader_compile_info *compile_info, uint64_t c
         }
     }
 
-    program->has_descriptor_info = true;
+    program->normalisation_flags.has_descriptor_info = true;
 
     if (TRACE_ON())
         vsir_program_trace(program);

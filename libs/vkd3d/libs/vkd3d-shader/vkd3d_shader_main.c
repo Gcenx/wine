@@ -319,14 +319,21 @@ void vkd3d_string_buffer_release(struct vkd3d_string_buffer_cache *cache, struct
     cache->buffers[cache->count++] = buffer;
 }
 
-void vkd3d_shader_code_from_string_buffer(struct vkd3d_shader_code *code, struct vkd3d_string_buffer *buffer)
+static char *vkd3d_shader_string_from_string_buffer(struct vkd3d_string_buffer *buffer)
 {
-    code->code = buffer->buffer;
-    code->size = buffer->content_size;
+    char *s = buffer->buffer;
 
     buffer->buffer = NULL;
     buffer->buffer_size = 0;
     buffer->content_size = 0;
+
+    return s;
+}
+
+void vkd3d_shader_code_from_string_buffer(struct vkd3d_shader_code *code, struct vkd3d_string_buffer *buffer)
+{
+    code->size = buffer->content_size;
+    code->code = vkd3d_shader_string_from_string_buffer(buffer);
 }
 
 void vkd3d_shader_message_context_init(struct vkd3d_shader_message_context *context,
@@ -347,23 +354,15 @@ void vkd3d_shader_message_context_trace_messages_(const struct vkd3d_shader_mess
     vkd3d_string_buffer_trace_(&context->messages, function);
 }
 
-bool vkd3d_shader_message_context_copy_messages(struct vkd3d_shader_message_context *context, char **out)
+void vkd3d_shader_string_from_message_context(char **out, struct vkd3d_shader_message_context *context)
 {
-    char *messages;
-
     if (!out)
-        return true;
+        return;
 
-    *out = NULL;
-
-    if (!context->messages.content_size)
-        return true;
-
-    if (!(messages = vkd3d_malloc(context->messages.content_size + 1)))
-        return false;
-    memcpy(messages, context->messages.buffer, context->messages.content_size + 1);
-    *out = messages;
-    return true;
+    if (context->messages.content_size)
+        *out = vkd3d_shader_string_from_string_buffer(&context->messages);
+    else
+        *out = NULL;
 }
 
 void vkd3d_shader_vnote(struct vkd3d_shader_message_context *context, const struct vkd3d_shader_location *location,
@@ -729,6 +728,7 @@ void vkd3d_shader_parser_init(struct vkd3d_shader_parser *parser,
     parser->location.source_name = source_name;
     parser->location.line = 1;
     parser->location.column = 0;
+    parser->status = VKD3D_OK;
 }
 
 void VKD3D_PRINTF_FUNC(3, 4) vkd3d_shader_parser_error(struct vkd3d_shader_parser *parser,
@@ -1676,7 +1676,7 @@ static int vsir_program_scan(struct vsir_program *program, const struct vkd3d_sh
         add_descriptor_info = true;
     }
 
-    if (program->has_descriptor_info)
+    if (program->normalisation_flags.has_descriptor_info)
         add_descriptor_info = false;
 
     tessellation_info = vkd3d_find_struct(compile_info->next, SCAN_HULL_SHADER_TESSELLATION_INFO);
@@ -1686,7 +1686,7 @@ static int vsir_program_scan(struct vsir_program *program, const struct vkd3d_sh
             add_descriptor_info ? &program->descriptors : NULL, combined_sampler_info, message_context);
 
     if (add_descriptor_info)
-        program->has_descriptor_info = true;
+        program->normalisation_flags.has_descriptor_info = true;
 
     if (TRACE_ON())
         vsir_program_trace(program);
@@ -1771,8 +1771,7 @@ int vkd3d_shader_scan(const struct vkd3d_shader_compile_info *compile_info, char
     }
 
     vkd3d_shader_message_context_trace_messages(&message_context);
-    if (!vkd3d_shader_message_context_copy_messages(&message_context, messages))
-        ret = VKD3D_ERROR_OUT_OF_MEMORY;
+    vkd3d_shader_string_from_message_context(messages, &message_context);
     vkd3d_shader_message_context_cleanup(&message_context);
     return ret;
 }
@@ -1919,8 +1918,7 @@ int vkd3d_shader_compile(const struct vkd3d_shader_compile_info *compile_info,
         vkd3d_shader_dump_shader(&dump_data, out->code, out->size, SHADER_DUMP_TYPE_TARGET);
 
     vkd3d_shader_message_context_trace_messages(&message_context);
-    if (!vkd3d_shader_message_context_copy_messages(&message_context, messages))
-        ret = VKD3D_ERROR_OUT_OF_MEMORY;
+    vkd3d_shader_string_from_message_context(messages, &message_context);
     vkd3d_shader_message_context_cleanup(&message_context);
     return ret;
 }
@@ -2038,9 +2036,7 @@ int vkd3d_shader_parse_input_signature(const struct vkd3d_shader_code *dxbc,
 
     ret = shader_parse_input_signature(dxbc, &message_context, &shader_signature);
     vkd3d_shader_message_context_trace_messages(&message_context);
-    if (!vkd3d_shader_message_context_copy_messages(&message_context, messages))
-        ret = VKD3D_ERROR_OUT_OF_MEMORY;
-
+    vkd3d_shader_string_from_message_context(messages, &message_context);
     vkd3d_shader_message_context_cleanup(&message_context);
 
     if (!vkd3d_shader_signature_from_shader_signature(signature, &shader_signature))
@@ -2245,8 +2241,7 @@ int vkd3d_shader_preprocess(const struct vkd3d_shader_compile_info *compile_info
         vkd3d_shader_dump_shader(&dump_data, out->code, out->size, SHADER_DUMP_TYPE_PREPROC);
 
     vkd3d_shader_message_context_trace_messages(&message_context);
-    if (!vkd3d_shader_message_context_copy_messages(&message_context, messages))
-        ret = VKD3D_ERROR_OUT_OF_MEMORY;
+    vkd3d_shader_string_from_message_context(messages, &message_context);
     vkd3d_shader_message_context_cleanup(&message_context);
     return ret;
 }

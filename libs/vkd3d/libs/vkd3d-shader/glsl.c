@@ -2481,8 +2481,8 @@ int glsl_compile(struct vsir_program *program, uint64_t config_flags,
         return ret;
 
     VKD3D_ASSERT(program->normalisation_level == VSIR_NORMALISED_SM6);
-    VKD3D_ASSERT(program->has_descriptor_info);
-    VKD3D_ASSERT(program->has_no_modifiers);
+    VKD3D_ASSERT(program->normalisation_flags.has_descriptor_info);
+    VKD3D_ASSERT(program->normalisation_flags.has_no_modifiers);
 
     vkd3d_glsl_generator_init(&generator, program, compile_info,
             combined_sampler_info, message_context);
