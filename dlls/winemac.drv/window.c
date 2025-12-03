@@ -1250,6 +1250,9 @@ void macdrv_DestroyWindow(HWND hwnd)
 
     destroy_cocoa_window(data);
 
+    if (data->dxmt_client_surface)
+        client_surface_release(&data->dxmt_client_surface->client);
+
     CFDictionaryRemoveValue(win_datas, hwnd);
     release_win_data(data);
     free(data);
