@@ -173,6 +173,7 @@ extern BOOL macdrv_SystemParametersInfo(UINT action, UINT int_param, void *ptr_p
 extern BOOL macdrv_ProcessEvents(DWORD mask);
 extern void macdrv_ThreadDetach(void);
 
+struct macdrv_client_surface;
 
 /* macdrv private window data */
 struct macdrv_win_data
@@ -190,6 +191,8 @@ struct macdrv_win_data
     unsigned int        per_pixel_alpha : 1;    /* is window using per-pixel alpha? */
     unsigned int        minimized : 1;          /* is window minimized? */
     unsigned int        fullscreen : 1;         /* is the window visible rect fullscreen? (unrelated to native AppKit/Cocoa fullscreen) */
+
+    struct macdrv_client_surface *dxmt_client_surface;
 };
 
 struct macdrv_client_surface
