@@ -5296,6 +5296,8 @@ int hlsl_parse(const struct vkd3d_shader_compile_info *compile_info,
     if (!vsir_program_init(program, compile_info, &version, 0, VSIR_CF_STRUCTURED, normalisation_level))
         return VKD3D_ERROR_OUT_OF_MEMORY;
 
+    program->f32_denorm_mode = VSIR_DENORM_FLUSH_TO_ZERO;
+
     if ((ret = hlsl_ctx_parse(&ctx, &program->source_files, compile_info, profile, message_context)) < 0)
     {
         vsir_program_cleanup(program);

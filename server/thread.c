@@ -428,6 +428,7 @@ static inline void init_thread_structure( struct thread *thread )
     thread->token           = NULL;
     thread->desc            = NULL;
     thread->desc_len        = 0;
+    thread->exit_poll       = NULL;
 
     thread->creation_time = current_time;
     thread->exit_time     = 0;
@@ -657,6 +658,7 @@ static void destroy_thread( struct object *obj )
     list_remove( &thread->entry );
     cleanup_thread( thread );
     release_object( thread->process );
+    if (thread->exit_poll) remove_timeout_user( thread->exit_poll );
     if (thread->id) free_ptid( thread->id );
     if (thread->token) release_object( thread->token );
     if (thread->alert_sync) release_object( thread->alert_sync );
@@ -1604,6 +1606,26 @@ int thread_get_inflight_fd( struct thread *thread, int client )
     return -1;
 }
 
+static void check_terminated( void *arg )
+{
+    struct thread *thread = arg;
+    assert( thread->obj.ops == &thread_ops );
+    assert( thread->state == TERMINATED );
+
+    /* don't wake up until the thread is really dead, to avoid race conditions */
+    if (thread->unix_tid != -1 && !kill( thread->unix_tid, 0 ))
+    {
+        thread->exit_poll = add_timeout_user( -TICKS_PER_SEC / 1000, check_terminated, thread );
+        return;
+    }
+
+    /* grab reference since object can be destroyed while trying to wake up */
+    grab_object( &thread->obj );
+    thread->exit_poll = NULL;
+    signal_sync( thread->sync );
+    release_object( &thread->obj );
+}
+
 /* kill a thread on the spot */
 void kill_thread( struct thread *thread, int violent_death )
 {
@@ -1623,8 +1645,13 @@ void kill_thread( struct thread *thread, int violent_death )
     }
     kill_console_processes( thread, 0 );
     abandon_mutexes( thread );
-    signal_sync( thread->sync );
-    if (violent_death) send_thread_signal( thread, SIGQUIT );
+    if (violent_death)
+    {
+        send_thread_signal( thread, SIGQUIT );
+        check_terminated( thread );
+    }
+    else
+        signal_sync( thread->sync );
     cleanup_thread( thread );
     remove_process_thread( thread->process, thread );
     release_object( thread );
