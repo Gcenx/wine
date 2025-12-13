@@ -4079,7 +4079,8 @@ HRESULT WINAPI D3DXLoadMeshHierarchyFromXInMemory(const void *memory, DWORD memo
     if (anim_controller)
     {
         *anim_controller = NULL;
-        FIXME("Animation controller creation not implemented.\n");
+        /*FIXME("Animation controller creation not implemented.\n");*/
+        D3DXCreateAnimationController(1, 1, 1, 1, anim_controller);
     }
 
 cleanup:
@@ -7632,6 +7633,24 @@ done:
 }
 
 /*************************************************************************
+ * D3DXComputeTangent    (D3DX9_36.@)
+ */
+HRESULT WINAPI D3DXComputeTangent(ID3DXMesh *mesh, DWORD stage_idx, DWORD tangent_idx,
+        DWORD binorm_idx, DWORD wrap, const DWORD *adjacency)
+{
+    TRACE("mesh %p, stage_idx %ld, tangent_idx %ld, binorm_idx %ld, wrap %ld, adjacency %p.\n",
+           mesh, stage_idx, tangent_idx, binorm_idx, wrap, adjacency);
+
+    return D3DXComputeTangentFrameEx( mesh, D3DDECLUSAGE_TEXCOORD, stage_idx,
+            ( binorm_idx == D3DX_DEFAULT ) ? D3DX_DEFAULT : D3DDECLUSAGE_BINORMAL,
+            binorm_idx,
+            ( tangent_idx == D3DX_DEFAULT ) ? D3DX_DEFAULT : D3DDECLUSAGE_TANGENT,
+            tangent_idx, D3DX_DEFAULT, 0,
+            ( wrap ? D3DXTANGENT_WRAP_UV : 0 ) | D3DXTANGENT_GENERATE_IN_PLACE | D3DXTANGENT_ORTHOGONALIZE_FROM_U,
+            adjacency, -1.01f, -0.01f, -1.01f, NULL, NULL);
+}
+
+/*************************************************************************
  * D3DXComputeNormals    (D3DX9_36.@)
  */
 HRESULT WINAPI D3DXComputeNormals(struct ID3DXBaseMesh *mesh, const DWORD *adjacency)
@@ -7658,6 +7677,8 @@ HRESULT WINAPI D3DXIntersect(ID3DXBaseMesh *mesh, const D3DXVECTOR3 *ray_pos, co
 {
     FIXME("mesh %p, ray_pos %p, ray_dir %p, hit %p, face_index %p, u %p, v %p, distance %p, all_hits %p, "
             "count_of_hits %p stub!\n", mesh, ray_pos, ray_dir, hit, face_index, u, v, distance, all_hits, count_of_hits);
+
+    *hit = FALSE;
 
     return E_NOTIMPL;
 }

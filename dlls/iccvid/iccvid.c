@@ -1022,6 +1022,15 @@ LRESULT WINAPI ICCVID_DriverProc( DWORD_PTR dwDriverId, HDRVR hdrvr, UINT msg,
     case ICM_DECOMPRESS:
         return ICCVID_Decompress( info, (ICDECOMPRESS*) lParam1,
                                   (DWORD) lParam2 );
+    case ICM_DECOMPRESSEX_BEGIN:
+    {
+        ICDECOMPRESSEX *icdex = (ICDECOMPRESSEX *)lParam1;
+
+        FIXME("extended parameters not handled\n");
+
+        return ICCVID_DecompressBegin( info, (LPBITMAPINFO)icdex->lpbiSrc,
+                                       (LPBITMAPINFO)icdex->lpbiDst );
+    }
     case ICM_DECOMPRESSEX:
         return ICCVID_DecompressEx( info, (ICDECOMPRESSEX*) lParam1, 
                                   (DWORD) lParam2 );

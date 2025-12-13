@@ -450,7 +450,6 @@ BOOL WINAPI UnloadKeyboardLayout( HKL layout )
     return FALSE;
 }
 
-
 static DWORD CALLBACK devnotify_window_callbackW(HANDLE handle, DWORD flags, DEV_BROADCAST_HDR *header)
 {
     SendMessageTimeoutW(handle, WM_DEVICECHANGE, flags, (LPARAM)header, SMTO_ABORTIFHUNG, 2000, NULL);
