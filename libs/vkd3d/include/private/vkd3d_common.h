@@ -285,7 +285,7 @@ static inline unsigned int vkd3d_popcount(unsigned int v)
 {
 #ifdef _MSC_VER
     return __popcnt(v);
-#elif defined(__MINGW32__)
+#elif defined(HAVE_BUILTIN_POPCOUNT)
     return __builtin_popcount(v);
 #else
     v -= (v >> 1) & 0x55555555;
@@ -349,12 +349,7 @@ static inline unsigned int vkd3d_log2i(unsigned int x)
 
 static inline unsigned int vkd3d_ctz(uint32_t v)
 {
-#ifdef _WIN32
-    ULONG result;
-    if (_BitScanForward(&result, v))
-        return (unsigned int)result;
-    return 32;
-#elif defined(HAVE_BUILTIN_CTZ)
+#ifdef HAVE_BUILTIN_CTZ
     return __builtin_ctz(v);
 #else
     unsigned int c = 31;
