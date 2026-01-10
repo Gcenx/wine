@@ -44,14 +44,21 @@ struct mount_point
 static struct list mount_points_list = LIST_INIT(mount_points_list);
 static HKEY mount_key;
 
-void set_mount_point_id( struct mount_point *mount, const void *id, unsigned int id_len )
+void set_mount_point_id( struct mount_point *mount, const void *id, unsigned int id_len, int drive )
 {
+    WCHAR logicalW[] = {'\\','\\','.','\\','a',':',0};
     free( mount->id );
     mount->id_len = max( MIN_ID_LEN, id_len );
     if ((mount->id = calloc( mount->id_len, 1 )))
     {
         memcpy( mount->id, id, id_len );
-        RegSetValueExW( mount_key, mount->link.Buffer, 0, REG_BINARY, mount->id, mount->id_len );
+        if (drive < 0)
+            RegSetValueExW( mount_key, mount->link.Buffer, 0, REG_BINARY, mount->id, mount->id_len );
+        else
+        {
+            logicalW[4] = 'a' + drive;
+            RegSetValueExW( mount_key, mount->link.Buffer, 0, REG_BINARY, (BYTE*)logicalW, sizeof(logicalW) );
+        }
     }
     else mount->id_len = 0;
 }
@@ -564,6 +571,27 @@ static DWORD WINAPI run_loop_thread( void *arg )
     return MOUNTMGR_CALL( run_loop, &params );
 }
 
+static DWORD WINAPI registry_flush_thread( void *arg )
+{
+    UNICODE_STRING name = RTL_CONSTANT_STRING( L"\\Registry" );
+    OBJECT_ATTRIBUTES attr;
+    HANDLE root;
+
+    InitializeObjectAttributes( &attr, &name, 0, 0, NULL );
+    if (NtOpenKeyEx( &root, MAXIMUM_ALLOWED, &attr, 0 ))
+    {
+        ERR( "Failed opening root registry key.\n" );
+        return 0;
+    }
+
+    for (;;)
+    {
+        Sleep( 30000 );
+        if (NtFlushKey( root )) ERR( "Failed flushing registry.\n" );
+    }
+
+    return 0;
+}
 
 /* main entry point for the mount point manager driver */
 NTSTATUS WINAPI DriverEntry( DRIVER_OBJECT *driver, UNICODE_STRING *path )
@@ -607,6 +635,7 @@ NTSTATUS WINAPI DriverEntry( DRIVER_OBJECT *driver, UNICODE_STRING *path )
 
     thread = CreateThread( NULL, 0, device_op_thread, NULL, 0, NULL );
     CloseHandle( CreateThread( NULL, 0, run_loop_thread, thread, 0, NULL ));
+    CloseHandle( CreateThread( NULL, 0, registry_flush_thread, thread, 0, NULL ));
 
 #ifdef _WIN64
     /* create a symlink so that the Wine port overrides key can be edited with 32-bit reg or regedit */
