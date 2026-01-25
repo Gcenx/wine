@@ -430,6 +430,8 @@ static BOOL wined3d_dll_init(HINSTANCE hInstDLL)
             ERR_(winediag)("Setting strict shader math to %#x.\n", wined3d_settings.strict_shader_math);
         if (!get_config_key_dword(hkey, appkey, env, "MaxShaderModelVS", &wined3d_settings.max_sm_vs))
             TRACE("Limiting VS shader model to %u.\n", wined3d_settings.max_sm_vs);
+        if (!get_config_key_dword(hkey, appkey, env, "multiply_special", &wined3d_settings.multiply_special))
+            ERR_(winediag)("Setting multiply special to %#x.\n", wined3d_settings.multiply_special);
         if (!get_config_key_dword(hkey, appkey, env, "MaxShaderModelHS", &wined3d_settings.max_sm_hs))
             TRACE("Limiting HS shader model to %u.\n", wined3d_settings.max_sm_hs);
         if (!get_config_key_dword(hkey, appkey, env, "MaxShaderModelDS", &wined3d_settings.max_sm_ds))

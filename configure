@@ -1151,6 +1151,8 @@ enable_dx8vb
 enable_dxcore
 enable_dxdiagn
 enable_dxgi
+enable_dxgkrnl_sys
+enable_dxgmms1_sys
 enable_dxtrans
 enable_dxva2
 enable_esent
@@ -1504,6 +1506,7 @@ enable_wevtapi
 enable_wevtsvc
 enable_wiaservc
 enable_wimgapi
+enable_win32k_sys
 enable_win32u
 enable_winbio
 enable_winbrand
@@ -9626,18 +9629,18 @@ then :
 fi
 if test "$enable_largefile,$enable_year2038" != no,no
 then :
-  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for $CPPFLAGS option for large files" >&5
-printf %s "checking for $CPPFLAGS option for large files... " >&6; }
+  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for $CC option to enable large file support" >&5
+printf %s "checking for $CC option to enable large file support... " >&6; }
 if test ${ac_cv_sys_largefile_opts+y}
 then :
   printf %s "(cached) " >&6
 else case e in #(
-  e) ac_save_CPPFLAGS=$CPPFLAGS
+  e) ac_save_CC="$CC"
   ac_opt_found=no
-  for ac_opt in "none needed" "-D_FILE_OFFSET_BITS=64" "-D_LARGE_FILES=1"; do
+  for ac_opt in "none needed" "-D_FILE_OFFSET_BITS=64" "-D_LARGE_FILES=1" "-n32"; do
     if test x"$ac_opt" != x"none needed"
 then :
-  CPPFLAGS="$ac_save_CPPFLAGS $ac_opt"
+  CC="$ac_save_CC $ac_opt"
 fi
     cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
@@ -9666,12 +9669,12 @@ then :
   if test x"$ac_opt" = x"none needed"
 then :
   # GNU/Linux s390x and alpha need _FILE_OFFSET_BITS=64 for wide ino_t.
-	 CPPFLAGS="$CPPFLAGS -DFTYPE=ino_t"
+	 CC="$CC -DFTYPE=ino_t"
 	 if ac_fn_c_try_compile "$LINENO"
 then :
 
 else case e in #(
-  e) CPPFLAGS="$CPPFLAGS -D_FILE_OFFSET_BITS=64"
+  e) CC="$CC -D_FILE_OFFSET_BITS=64"
 	    if ac_fn_c_try_compile "$LINENO"
 then :
   ac_opt='-D_FILE_OFFSET_BITS=64'
@@ -9687,7 +9690,7 @@ fi
 rm -f core conftest.err conftest.$ac_objext conftest.beam conftest.$ac_ext
     test $ac_opt_found = no || break
   done
-  CPPFLAGS=$ac_save_CPPFLAGS
+  CC="$ac_save_CC"
 
   test $ac_opt_found = yes || ac_cv_sys_largefile_opts="support not detected" ;;
 esac
@@ -9711,14 +9714,16 @@ printf "%s\n" "#define _FILE_OFFSET_BITS 64" >>confdefs.h
 
 printf "%s\n" "#define _LARGE_FILES 1" >>confdefs.h
  ;; #(
+  "-n32") :
+    CC="$CC -n32" ;; #(
   *) :
     as_fn_error $? "internal error: bad value for \$ac_cv_sys_largefile_opts" "$LINENO" 5 ;;
 esac
 
 if test "$enable_year2038" != no
 then :
-  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for $CPPFLAGS option for timestamps after 2038" >&5
-printf %s "checking for $CPPFLAGS option for timestamps after 2038... " >&6; }
+  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for $CC option for timestamps after 2038" >&5
+printf %s "checking for $CC option for timestamps after 2038... " >&6; }
 if test ${ac_cv_sys_year2038_opts+y}
 then :
   printf %s "(cached) " >&6
@@ -9976,6 +9981,12 @@ ac_fn_c_check_header_compile "$LINENO" "linux/param.h" "ac_cv_header_linux_param
 if test "x$ac_cv_header_linux_param_h" = xyes
 then :
   printf "%s\n" "#define HAVE_LINUX_PARAM_H 1" >>confdefs.h
+
+fi
+ac_fn_c_check_header_compile "$LINENO" "linux/seccomp.h" "ac_cv_header_linux_seccomp_h" "$ac_includes_default"
+if test "x$ac_cv_header_linux_seccomp_h" = xyes
+then :
+  printf "%s\n" "#define HAVE_LINUX_SECCOMP_H 1" >>confdefs.h
 
 fi
 ac_fn_c_check_header_compile "$LINENO" "linux/serial.h" "ac_cv_header_linux_serial_h" "$ac_includes_default"
@@ -14915,6 +14926,13 @@ fi
 if test "x$ac_cv_header_X11_extensions_shape_h" = xyes
 then :
   printf "%s\n" "#define HAVE_X11_EXTENSIONS_SHAPE_H 1" >>confdefs.h
+
+fi
+ac_fn_c_check_header_compile "$LINENO" "X11/extensions/XInput.h" "ac_cv_header_X11_extensions_XInput_h" "$xlib_includes
+"
+if test "x$ac_cv_header_X11_extensions_XInput_h" = xyes
+then :
+  printf "%s\n" "#define HAVE_X11_EXTENSIONS_XINPUT_H 1" >>confdefs.h
 
 fi
 ac_fn_c_check_header_compile "$LINENO" "X11/extensions/XInput2.h" "ac_cv_header_X11_extensions_XInput2_h" "$xlib_includes
@@ -22586,6 +22604,8 @@ wine_fn_config_makefile dlls/dxdiagn enable_dxdiagn
 wine_fn_config_makefile dlls/dxdiagn/tests enable_tests
 wine_fn_config_makefile dlls/dxgi enable_dxgi
 wine_fn_config_makefile dlls/dxgi/tests enable_tests
+wine_fn_config_makefile dlls/dxgkrnl.sys enable_dxgkrnl_sys
+wine_fn_config_makefile dlls/dxgmms1.sys enable_dxgmms1_sys
 wine_fn_config_makefile dlls/dxtrans enable_dxtrans
 wine_fn_config_makefile dlls/dxva2 enable_dxva2
 wine_fn_config_makefile dlls/dxva2/tests enable_tests
@@ -23148,6 +23168,7 @@ wine_fn_config_makefile dlls/wevtsvc enable_wevtsvc
 wine_fn_config_makefile dlls/wiaservc enable_wiaservc
 wine_fn_config_makefile dlls/wiaservc/tests enable_tests
 wine_fn_config_makefile dlls/wimgapi enable_wimgapi
+wine_fn_config_makefile dlls/win32k.sys enable_win32k_sys
 wine_fn_config_makefile dlls/win32s16.dll16 enable_win16
 wine_fn_config_makefile dlls/win32u enable_win32u
 wine_fn_config_makefile dlls/win32u/tests enable_tests
@@ -23591,7 +23612,7 @@ fi
 
 as_fn_append wine_rules "
 dlls/ntdll/unix/version.c: dummy
-	@version=\`(GIT_DIR=${wine_srcdir}.git git describe HEAD 2>/dev/null || echo \"wine-\$(PACKAGE_VERSION)\") | sed -n -e '\$\$s/\(.*\)/const char wine_build[] = \"\\1\";/p'\` && (echo \$\$version | cmp -s - \$@) || echo \$\$version >\$@ || (rm -f \$@ && exit 1)
+	@version=\`(GIT_DIR=${wine_srcdir}.git git describe HEAD 2>/dev/null || echo \"wine-\$(PACKAGE_VERSION)\") | sed -n -e '\$\$s/\(.*\)/const char wine_build[] = \"\\1 (Staging)\";/p'\` && (echo \$\$version | cmp -s - \$@) || echo \$\$version >\$@ || (rm -f \$@ && exit 1)
 programs/winetest/build.rc: dummy
 	@build=\"STRINGTABLE { 1 \\\"\`GIT_DIR=${wine_srcdir}.git git rev-parse HEAD 2>/dev/null\`\\\" }\" && (echo \$\$build | cmp -s - \$@) || echo \$\$build >\$@ || (rm -f \$@ && exit 1)
 dlls/wineandroid.drv/wine-debug.apk: dlls/wineandroid.drv/build.gradle ${wine_srcdir}dlls/wineandroid.drv/AndroidManifest.xml ${wine_srcdir}dlls/wineandroid.drv/WineActivity.java ${wine_srcdir}dlls/wineandroid.drv/wine.svg
