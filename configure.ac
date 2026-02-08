@@ -686,6 +686,7 @@ AC_CHECK_HEADERS(\
 	linux/major.h \
 	linux/ntsync.h \
 	linux/param.h \
+	linux/seccomp.h \
 	linux/serial.h \
 	linux/types.h \
 	linux/ucdrom.h \
@@ -1261,6 +1262,7 @@ then
 
     dnl *** All of the following tests require X11/Xlib.h
     AC_CHECK_HEADERS([X11/extensions/shape.h \
+                      X11/extensions/XInput.h \
                       X11/extensions/XInput2.h \
                       X11/extensions/XShm.h \
                       X11/extensions/Xfixes.h \
@@ -2727,6 +2729,8 @@ WINE_CONFIG_MAKEFILE(dlls/dxdiagn)
 WINE_CONFIG_MAKEFILE(dlls/dxdiagn/tests)
 WINE_CONFIG_MAKEFILE(dlls/dxgi)
 WINE_CONFIG_MAKEFILE(dlls/dxgi/tests)
+WINE_CONFIG_MAKEFILE(dlls/dxgkrnl.sys)
+WINE_CONFIG_MAKEFILE(dlls/dxgmms1.sys)
 WINE_CONFIG_MAKEFILE(dlls/dxtrans)
 WINE_CONFIG_MAKEFILE(dlls/dxva2)
 WINE_CONFIG_MAKEFILE(dlls/dxva2/tests)
@@ -3289,6 +3293,7 @@ WINE_CONFIG_MAKEFILE(dlls/wevtsvc)
 WINE_CONFIG_MAKEFILE(dlls/wiaservc)
 WINE_CONFIG_MAKEFILE(dlls/wiaservc/tests)
 WINE_CONFIG_MAKEFILE(dlls/wimgapi)
+WINE_CONFIG_MAKEFILE(dlls/win32k.sys)
 WINE_CONFIG_MAKEFILE(dlls/win32s16.dll16)
 WINE_CONFIG_MAKEFILE(dlls/win32u)
 WINE_CONFIG_MAKEFILE(dlls/win32u/tests)
@@ -3766,7 +3771,7 @@ dnl Rules for generated source files
 
 WINE_APPEND_RULE(
 [dlls/ntdll/unix/version.c: dummy
-	@version=\`(GIT_DIR=${wine_srcdir}.git git describe HEAD 2>/dev/null || echo \"wine-\$(PACKAGE_VERSION)\") | sed -n -e '\$\$s/\(.*\)/const char wine_build[[]] = \"\\1\";/p'\` && (echo \$\$version | cmp -s - \$[@]) || echo \$\$version >\$[@] || (rm -f \$[@] && exit 1)
+	@version=\`(GIT_DIR=${wine_srcdir}.git git describe HEAD 2>/dev/null || echo \"wine-\$(PACKAGE_VERSION)\") | sed -n -e '\$\$s/\(.*\)/const char wine_build[[]] = \"\\1 (Staging)\";/p'\` && (echo \$\$version | cmp -s - \$[@]) || echo \$\$version >\$[@] || (rm -f \$[@] && exit 1)
 programs/winetest/build.rc: dummy
 	@build=\"STRINGTABLE { 1 \\\"\`GIT_DIR=${wine_srcdir}.git git rev-parse HEAD 2>/dev/null\`\\\" }\" && (echo \$\$build | cmp -s - \$[@]) || echo \$\$build >\$[@] || (rm -f \$[@] && exit 1)
 dlls/wineandroid.drv/wine-debug.apk: dlls/wineandroid.drv/build.gradle ${wine_srcdir}dlls/wineandroid.drv/AndroidManifest.xml ${wine_srcdir}dlls/wineandroid.drv/WineActivity.java ${wine_srcdir}dlls/wineandroid.drv/wine.svg

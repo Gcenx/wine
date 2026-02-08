@@ -798,6 +798,13 @@ static const char win936xml[] =
 DECL_WIN_936
 "<open></open>";
 
+#define DECL_WIN_GB2312 \
+"<?xml version=\"1.0\" encoding=\"GB2312\"?>"
+
+static const char gb2312xml[] =
+DECL_WIN_GB2312
+"<open></open>";
+
 #define DECL_WIN_1252 \
 "<?xml version=\"1.0\" encoding=\"Windows-1252\"?>"
 
@@ -4906,6 +4913,16 @@ static void test_whitespace(void)
         check_ws_ignored(class_ptr->name, doc3, NULL);
         check_ws_preserved(class_ptr->name, doc4, NULL);
 
+        hr = IXMLDOMDocument2_put_preserveWhiteSpace(doc4, 1);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+        hr = IXMLDOMDocument2_get_preserveWhiteSpace(doc4, &b);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+        ok(b == VARIANT_FALSE, "expected true\n");
+        check_ws_ignored(class_ptr->name, doc4, NULL);
+
+        hr = IXMLDOMDocument2_put_preserveWhiteSpace(doc4, VARIANT_TRUE);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
         /* setting after loading xml affects trimming of leading/trailing ws only */
         hr = IXMLDOMDocument2_put_preserveWhiteSpace(doc1, VARIANT_TRUE);
         ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
@@ -4971,6 +4988,17 @@ static void test_whitespace(void)
         ok(len == 3, "got %ld\n", len);
         IXMLDOMNodeList_Release(list);
         IXMLDOMElement_Release(root);
+
+        hr = IXMLDOMDocument2_put_preserveWhiteSpace(doc1, VARIANT_TRUE);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+        hr = IXMLDOMDocument2_get_preserveWhiteSpace(doc1, &b);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+        ok(b == VARIANT_TRUE, "expected true %d\n", b);
+        hr = IXMLDOMDocument2_put_preserveWhiteSpace(doc1, 1);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+        hr = IXMLDOMDocument2_get_preserveWhiteSpace(doc1, &b);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+        ok(b == VARIANT_FALSE, "expected true %d\n", b);
 
         IXMLDOMDocument2_Release(doc1);
 
@@ -11007,6 +11035,7 @@ static void test_load(void)
         { iso8859_1_xml, S_OK,    VARIANT_TRUE  },
         { win1252xml,    S_OK,    VARIANT_TRUE  },
         { win936xml,     S_FALSE, VARIANT_FALSE },
+        { gb2312xml,     S_OK,    VARIANT_TRUE  },
     };
 
 
@@ -14357,6 +14386,205 @@ static void test_indent(void)
     SysFreeString(str);
 }
 
+static void test_embedded_xml_declaration(void)
+{
+    IXMLDOMDocument *doc;
+    IXMLDOMElement *elem;
+    IXMLDOMNode *node;
+    IXMLDOMNodeList *nodes;
+    BSTR str;
+    VARIANT_BOOL b;
+    HRESULT hr;
+    LONG len;
+
+    /* Test XML with embedded <?xml?> declaration inside an element.
+     * Windows MSXML tolerates this but libxml2 rejects it.
+     * The implementation wraps such content in CDATA to make it parse. */
+    static const char embedded_xml_str[] =
+        "<?xml version=\"1.0\"?>"
+        "<root>"
+        "  <xmldata><?xml version=\"1.0\"?><nested>content</nested></xmldata>"
+        "</root>";
+
+    /* Test with xml:space preserved content containing XML declaration */
+    static const char embedded_xml_space_str[] =
+        "<?xml version=\"1.0\"?>"
+        "<root xml:space=\"preserve\">"
+        "  <?xml version=\"1.0\"?><data>test</data>"
+        "</root>";
+
+    /* Test normal XML without embedded declarations (should still work) */
+    static const char normal_xml_str[] =
+        "<?xml version=\"1.0\"?>"
+        "<root><child>text</child></root>";
+
+    /* Test *XMLData element pattern - element content that should be wrapped */
+    static const char xmldata_element_str[] =
+        "<?xml version=\"1.0\"?>"
+        "<root>"
+        "  <CustomXMLData><item>value</item></CustomXMLData>"
+        "</root>";
+
+    /* Test multiple embedded declarations */
+    static const char multi_embedded_str[] =
+        "<?xml version=\"1.0\"?>"
+        "<root>"
+        "  <first><?xml version=\"1.0\"?><a>1</a></first>"
+        "  <second><b>2</b></second>"
+        "</root>";
+
+    /* Test deeply nested embedded declaration */
+    static const char deep_embedded_str[] =
+        "<?xml version=\"1.0\"?>"
+        "<root><level1><level2><data><?xml version=\"1.0\"?><deep>nested</deep></data></level2></level1></root>";
+
+    /* Test with encoding in embedded declaration */
+    static const char embedded_with_encoding_str[] =
+        "<?xml version=\"1.0\"?>"
+        "<root>"
+        "  <xmldata><?xml version=\"1.0\" encoding=\"UTF-8\"?><test>encoded</test></xmldata>"
+        "</root>";
+
+    /* Test self-closing XMLData element (should not need wrapping) */
+    static const char selfclose_xmldata_str[] =
+        "<?xml version=\"1.0\"?>"
+        "<root><EmptyXMLData/></root>";
+
+    doc = NULL;
+    hr = CoCreateInstance(&CLSID_DOMDocument30, NULL, CLSCTX_INPROC_SERVER,
+            &IID_IXMLDOMDocument, (void**)&doc);
+    if (hr != S_OK)
+    {
+        win_skip("DOMDocument30 not available, skipping embedded XML tests\n");
+        return;
+    }
+
+    /* Test 1: Normal XML should parse fine */
+    b = VARIANT_FALSE;
+    hr = IXMLDOMDocument_loadXML(doc, _bstr_(normal_xml_str), &b);
+    ok(hr == S_OK, "loadXML failed: %#lx\n", hr);
+    ok(b == VARIANT_TRUE, "failed to load normal XML\n");
+
+    hr = IXMLDOMDocument_get_documentElement(doc, &elem);
+    ok(hr == S_OK, "get_documentElement failed: %#lx\n", hr);
+    if (elem)
+        IXMLDOMElement_Release(elem);
+
+    /* Test 2: XML with embedded declaration in element content */
+    b = VARIANT_FALSE;
+    hr = IXMLDOMDocument_loadXML(doc, _bstr_(embedded_xml_str), &b);
+    ok(hr == S_OK, "loadXML with embedded XML declaration failed: %#lx\n", hr);
+    ok(b == VARIANT_TRUE, "failed to load XML with embedded declaration\n");
+
+    if (b == VARIANT_TRUE)
+    {
+        hr = IXMLDOMDocument_get_documentElement(doc, &elem);
+        ok(hr == S_OK, "get_documentElement failed: %#lx\n", hr);
+        if (elem)
+            IXMLDOMElement_Release(elem);
+    }
+
+    /* Test 3: XML with embedded declaration and xml:space */
+    b = VARIANT_FALSE;
+    hr = IXMLDOMDocument_loadXML(doc, _bstr_(embedded_xml_space_str), &b);
+    ok(hr == S_OK, "loadXML with embedded XML and xml:space failed: %#lx\n", hr);
+    ok(b == VARIANT_TRUE, "failed to load XML with embedded declaration and xml:space\n");
+
+    /* Test 4: *XMLData element with element content */
+    b = VARIANT_FALSE;
+    hr = IXMLDOMDocument_loadXML(doc, _bstr_(xmldata_element_str), &b);
+    ok(hr == S_OK, "loadXML with *XMLData element failed: %#lx\n", hr);
+    ok(b == VARIANT_TRUE, "failed to load XML with *XMLData element\n");
+
+    if (b == VARIANT_TRUE)
+    {
+        hr = IXMLDOMDocument_get_documentElement(doc, &elem);
+        ok(hr == S_OK, "get_documentElement failed: %#lx\n", hr);
+        if (elem)
+        {
+            /* Verify we can access child elements */
+            hr = IXMLDOMElement_get_childNodes(elem, &nodes);
+            ok(hr == S_OK, "get_childNodes failed: %#lx\n", hr);
+            if (nodes)
+            {
+                hr = IXMLDOMNodeList_get_length(nodes, &len);
+                ok(hr == S_OK, "get_length failed: %#lx\n", hr);
+                ok(len > 0, "expected child nodes, got %ld\n", len);
+                IXMLDOMNodeList_Release(nodes);
+            }
+            IXMLDOMElement_Release(elem);
+        }
+    }
+
+    /* Test 5: Multiple embedded declarations in different elements */
+    b = VARIANT_FALSE;
+    hr = IXMLDOMDocument_loadXML(doc, _bstr_(multi_embedded_str), &b);
+    ok(hr == S_OK, "loadXML with multiple embedded declarations failed: %#lx\n", hr);
+    ok(b == VARIANT_TRUE, "failed to load XML with multiple embedded declarations\n");
+
+    if (b == VARIANT_TRUE)
+    {
+        hr = IXMLDOMDocument_get_documentElement(doc, &elem);
+        ok(hr == S_OK, "get_documentElement failed: %#lx\n", hr);
+        if (elem)
+        {
+            hr = IXMLDOMElement_get_childNodes(elem, &nodes);
+            ok(hr == S_OK, "get_childNodes failed: %#lx\n", hr);
+            if (nodes)
+            {
+                hr = IXMLDOMNodeList_get_length(nodes, &len);
+                ok(hr == S_OK, "get_length failed: %#lx\n", hr);
+                /* Should have at least 2 child elements (first and second) */
+                ok(len >= 2, "expected at least 2 child nodes, got %ld\n", len);
+                IXMLDOMNodeList_Release(nodes);
+            }
+            IXMLDOMElement_Release(elem);
+        }
+    }
+
+    /* Test 6: Deeply nested embedded declaration */
+    b = VARIANT_FALSE;
+    hr = IXMLDOMDocument_loadXML(doc, _bstr_(deep_embedded_str), &b);
+    ok(hr == S_OK, "loadXML with deeply nested embedded declaration failed: %#lx\n", hr);
+    ok(b == VARIANT_TRUE, "failed to load XML with deeply nested embedded declaration\n");
+
+    /* Test 7: Embedded declaration with encoding attribute */
+    b = VARIANT_FALSE;
+    hr = IXMLDOMDocument_loadXML(doc, _bstr_(embedded_with_encoding_str), &b);
+    ok(hr == S_OK, "loadXML with embedded encoding declaration failed: %#lx\n", hr);
+    ok(b == VARIANT_TRUE, "failed to load XML with embedded encoding declaration\n");
+
+    /* Test 8: Self-closing XMLData element (no content to wrap) */
+    b = VARIANT_FALSE;
+    hr = IXMLDOMDocument_loadXML(doc, _bstr_(selfclose_xmldata_str), &b);
+    ok(hr == S_OK, "loadXML with self-closing XMLData failed: %#lx\n", hr);
+    ok(b == VARIANT_TRUE, "failed to load XML with self-closing XMLData\n");
+
+    if (b == VARIANT_TRUE)
+    {
+        hr = IXMLDOMDocument_get_documentElement(doc, &elem);
+        ok(hr == S_OK, "get_documentElement failed: %#lx\n", hr);
+        if (elem)
+        {
+            hr = IXMLDOMElement_get_tagName(elem, &str);
+            ok(hr == S_OK, "get_tagName failed: %#lx\n", hr);
+            ok(!lstrcmpW(str, L"root"), "unexpected tag name: %s\n", wine_dbgstr_w(str));
+            SysFreeString(str);
+
+            /* Find the EmptyXMLData element */
+            hr = IXMLDOMElement_selectSingleNode(elem, _bstr_("EmptyXMLData"), &node);
+            ok(hr == S_OK, "selectSingleNode failed: %#lx\n", hr);
+            if (node)
+                IXMLDOMNode_Release(node);
+
+            IXMLDOMElement_Release(elem);
+        }
+    }
+
+    IXMLDOMDocument_Release(doc);
+    free_bstrs();
+}
+
 static DWORD WINAPI new_thread(void *arg)
 {
     HRESULT hr = CoInitialize(NULL);
@@ -14460,6 +14688,7 @@ START_TEST(domdoc)
     test_xsltemplate();
     test_xsltext();
     test_max_element_depth_values();
+    test_embedded_xml_declaration();
 
     if (is_clsid_supported(&CLSID_MXNamespaceManager40, &IID_IMXNamespaceManager))
     {
