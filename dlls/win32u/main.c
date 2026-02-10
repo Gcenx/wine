@@ -2543,6 +2543,16 @@ HWND SYSCALL_API NtUserWindowFromPoint( LONG x, LONG y )
 #define SYSCALL_STUB(name) NTSTATUS SYSCALL_API name(void) { SYSCALL_FUNC( name ); }
 ALL_SYSCALL_STUBS
 
+NTSTATUS SYSCALL_API __wine_get_current_process_explicit_app_user_model_id( WCHAR *buffer, INT size )
+{
+    SYSCALL_FUNC( __wine_get_current_process_explicit_app_user_model_id );
+}
+
+NTSTATUS SYSCALL_API __wine_set_current_process_explicit_app_user_model_id( const WCHAR *aumid )
+{
+    SYSCALL_FUNC( __wine_set_current_process_explicit_app_user_model_id );
+}
+
 #else /*  __arm64ec__ */
 
 #ifdef _WIN64

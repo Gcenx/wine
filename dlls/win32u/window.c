@@ -2177,12 +2177,26 @@ static BOOL apply_window_pos( HWND hwnd, HWND insert_after, UINT swp_flags, stru
     WND *win;
     HWND owner_hint, surface_win = 0, toplevel;
     UINT raw_dpi, monitor_dpi, dpi = get_thread_dpi();
-    BOOL ret, is_layered, is_child, need_icons = FALSE;
+    BOOL ret, is_layered, is_child, need_icons = FALSE, dummy_shm_surface = FALSE;
     struct window_rects old_rects;
     RECT extra_rects[3];
     struct window_surface *old_surface;
     HICON icon, icon_small;
     ICONINFO ii, ii_small;
+
+    /* CX HACK 23950: provide a default shm surface for windows with parents in other process */
+    HWND parent = NtUserGetAncestor( hwnd, GA_PARENT );
+    if (!(swp_flags & SWP_HIDEWINDOW))
+    {
+        win = get_win_ptr( parent );
+        if (win == OBJ_OTHER_PROCESS)
+        {
+            new_surface = &dummy_surface;
+            window_surface_add_ref( new_surface );
+            dummy_shm_surface = TRUE;
+        }
+        else if (win && win != WND_DESKTOP) release_win_ptr( win );
+    }
 
     toplevel = NtUserGetAncestor( hwnd, GA_ROOT );
     is_layered = new_surface && new_surface->alpha_mask;
@@ -2196,6 +2210,14 @@ static BOOL apply_window_pos( HWND hwnd, HWND insert_after, UINT swp_flags, stru
 
     if (!(win = get_win_ptr( hwnd )) || win == WND_DESKTOP || win == WND_OTHER_PROCESS) return FALSE;
     old_surface = win->surface;
+
+    /* CX HACK 23950 */
+    if (dummy_shm_surface && new_surface == &dummy_surface)
+    {
+        window_surface_release( new_surface );
+        new_surface = create_shm_surface( hwnd, parent, &new_rects->visible, old_surface );
+    }
+
     if (old_surface != new_surface) swp_flags |= SWP_FRAMECHANGED;  /* force refreshing non-client area */
 
     if (new_surface == &dummy_surface) swp_flags |= SWP_NOREDRAW;
@@ -2606,6 +2628,26 @@ BOOL WINAPI NtUserUpdateLayeredWindow( HWND hwnd, HDC hdc_dst, const POINT *pts_
     surface = get_window_surface( hwnd, swp_flags, TRUE, &new_rects, &surface_rect );
     apply_window_pos( hwnd, 0, swp_flags, surface, &new_rects, NULL );
     if (!surface) return FALSE;
+
+    /*
+     * CrossOver hack:
+     * Hide non-working, semi-transparent window in Quicken 2012.
+     * for bug 8982.
+     */
+    if(1)
+    {
+        static const WCHAR QWinLightbox[] = {'Q','W','i','n','L','i','g','h','t','b','o','x',0};
+        WCHAR buffer[sizeof(QWinLightbox) / sizeof(WCHAR)];
+        UNICODE_STRING name = { .Buffer = buffer, .MaximumLength = sizeof(QWinLightbox) };
+
+        if (NtUserGetClassName( hwnd, FALSE, &name )
+                && !memcmp( QWinLightbox, buffer, sizeof(QWinLightbox) ))
+        {
+            FIXME( "Hide semi-transparent window that is created over application window.\n" );
+            NtUserSetWindowPos( hwnd, HWND_BOTTOM, 0, 0, 0, 0,
+                                SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW | SWP_NOSENDCHANGING );
+        }
+    }
 
     if (!hdc_src || surface == &dummy_surface)
     {
@@ -5653,6 +5695,34 @@ HWND WINAPI NtUserCreateWindowEx( DWORD ex_style, UNICODE_STRING *class_name,
            "parent %p, menu %p, class_instance %p, params %p, flags %#x, instance %p, class %s, ansi %u\n",
            ex_style, debugstr_us(class_name), debugstr_us(version), debugstr_us(window_name), style, x, y, cx, cy,
            parent, menu, class_instance, params, flags, instance, debugstr_w(class), ansi );
+
+    /* CW Hack 24557 */
+    if (parent && parent != HWND_MESSAGE)
+    {
+        static const WCHAR unrealwindowW[] = {'U','n','r','e','a','l','W','i','n','d','o','w',0};
+        static const WCHAR marvel_rivalsW[] = {'M','a','r','v','e','l',' ','R','i','v','a','l','s',0};
+        static const WCHAR ntunisdkcompactwindowclassW[] = {'N','t','U','n','i','S','D','K','C','o','m','p','a','c','t','W','i','n','d','o','w','C','l','a','s','s',0};
+        if (class_name && class_name->Buffer && class_name->Length &&
+            !wcsncmp( class_name->Buffer, ntunisdkcompactwindowclassW, class_name->Length / sizeof(WCHAR) ))
+        {
+            WCHAR parent_class[ARRAY_SIZE(unrealwindowW)] = { 0 };
+            UNICODE_STRING class_str = { .MaximumLength = sizeof(unrealwindowW), .Buffer = parent_class };
+            if (NtUserGetClassName( parent, FALSE, &class_str ) &&
+                !wcscmp( parent_class, unrealwindowW ))
+            {
+                /* The actual title has spaces at the end, so make sure to do a
+                   wcsncmp here. */
+                WCHAR parent_title[ARRAY_SIZE(marvel_rivalsW)] = { 0 };
+                if (NtUserInternalGetWindowText( parent, parent_title, ARRAY_SIZE(marvel_rivalsW) ) &&
+                    !wcsncmp( parent_title, marvel_rivalsW, ARRAY_SIZE(marvel_rivalsW) - 1 ))
+                {
+                    FIXME("HACK: promoting Marvel Rivals login to an owned window\n");
+                    style &= ~WS_CHILD;
+                    style |= WS_POPUP;
+                }
+            }
+        }
+    }
 
     cs.lpCreateParams = params;
     cs.hInstance  = instance ? instance : class_instance;
