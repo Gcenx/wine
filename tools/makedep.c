@@ -177,6 +177,7 @@ static const char *arch_dirs[MAX_ARCHS];
 static const char *arch_pe_dirs[MAX_ARCHS];
 static const char *arch_install_dirs[MAX_ARCHS];
 static const char *strip_progs[MAX_ARCHS];
+static const char *cc_cmds[MAX_ARCHS];
 static const char *delay_load_flags[MAX_ARCHS];
 static struct strarray debug_flags[MAX_ARCHS];
 static struct strarray target_flags[MAX_ARCHS];
@@ -2626,6 +2627,7 @@ static void output_winegcc_command( struct makefile *make, unsigned int arch )
         output_filename( "--winebuild" );
         output_filename( winebuild );
     }
+    if (cc_cmds[arch]) output_filename( cc_cmds[arch] );
     output_filenames( target_flags[arch] );
     if (native_archs[arch] && !make->disabled[native_archs[arch]])
         output_filenames( hybrid_target_flags[arch] );
@@ -3681,6 +3683,7 @@ static void output_import_lib( struct makefile *make, unsigned int arch )
     if (hybrid_arch) output_filenames_obj_dir( make, make->implib_files[hybrid_arch] );
     output( "\n" );
     output( "\t%s%s -w --implib -o $@", cmd_prefix( "BUILD" ), winebuild );
+    if (cc_cmds[arch]) output_filename( cc_cmds[arch] );
     if (!delay_load_flags[arch]) output_filename( "--without-dlltool" );
     output_filenames( target_flags[hybrid_arch ? hybrid_arch : arch] );
     if (make->is_win16) output_filename( "-m16" );
@@ -3741,6 +3744,7 @@ static void output_static_lib( struct makefile *make, unsigned int arch )
     if (!arch) output_filenames_obj_dir( make, make->unixobj_files );
     output( "\n" );
     output( "\t%s%s -w --staticlib -o $@", cmd_prefix( "BUILD" ), winebuild );
+    if (cc_cmds[arch]) output_filename( cc_cmds[arch] );
     output_filenames( target_flags[hybrid_arch ? hybrid_arch : arch] );
     output_filenames_obj_dir( make, make->object_files[arch] );
     if (hybrid_arch) output_filenames_obj_dir( make, make->object_files[hybrid_arch] );
@@ -4814,6 +4818,7 @@ int main( int argc, char *argv[] )
         if (!is_multiarch( arch )) continue;
         delay_load_flags[arch] = get_expanded_arch_var( top_makefile, "DELAYLOADFLAG", arch );
         debug_flags[arch] = get_expanded_arch_var_array( top_makefile, "DEBUG", arch );
+        cc_cmds[arch] = strmake( "--cc-cmd=\"%s\"", get_expanded_arch_var( top_makefile, "CC", arch ));
     }
 
     if (unix_lib_supported)
