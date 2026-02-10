@@ -151,6 +151,7 @@ struct strarray temp_files = { 0 };
 static const char *bindir;
 static const char *libdir;
 static const char *includedir;
+static const char *cc_cmd;
 static const char *wine_objdir;
 static const char *winebuild;
 static const char *lib_suffix;
@@ -403,10 +404,29 @@ static const struct tool_names tool_cpp     = { "cpp",     "clang --driver-mode=
 static const struct tool_names tool_ld      = { "ld",      "ld.lld",                  LD };
 static const struct tool_names tool_objcopy = { "objcopy", "llvm-objcopy" };
 
+static void add_clang_options( const char *target_name, struct strarray *ret )
+{
+    if (target_name)
+    {
+        strarray_add( ret, "-target" );
+        strarray_add( ret, target_name );
+    }
+    strarray_add( ret, "-Wno-unused-command-line-argument" );
+    strarray_add( ret, "-fuse-ld=lld" );
+    if (no_default_config) strarray_add( ret, "--no-default-config" );
+}
+
 static struct strarray build_tool_name( const char *target_name, struct tool_names tool )
 {
     const char *path, *str;
     struct strarray ret;
+
+    if (cc_cmd && !strncmp( tool.llvm_base, "clang", 5 ))
+    {
+        ret = strarray_fromstring( cc_cmd, " " );
+        if (target.platform == PLATFORM_WINDOWS) add_clang_options( target_name, &ret );
+        return ret;
+    }
 
     if (target_name && target_version)
         str = strmake( "%s-%s-%s", target_name, tool.base, target_version );
@@ -427,17 +447,7 @@ static struct strarray build_tool_name( const char *target_name, struct tool_nam
     if (!(path = find_binary( str ))) error( "Could not find %s\n", tool.base );
 
     ret = strarray_fromstring( path, " " );
-    if (!strncmp( tool.llvm_base, "clang", 5 ))
-    {
-        if (target_name)
-        {
-            strarray_add( &ret, "-target" );
-            strarray_add( &ret, target_name );
-        }
-        strarray_add( &ret, "-Wno-unused-command-line-argument" );
-        strarray_add( &ret, "-fuse-ld=lld" );
-        if (no_default_config) strarray_add( &ret, "--no-default-config" );
-    }
+    if (!strncmp( tool.llvm_base, "clang", 5 )) add_clang_options( target_name, &ret );
     return ret;
 }
 
@@ -1683,7 +1693,8 @@ int main(int argc, char **argv)
                     next_is_arg = strcmp("-target", args.str[i]) == 0;
                     break;
 		case '-':
-		    next_is_arg = (strcmp("--param", args.str[i]) == 0 ||
+		    next_is_arg = (strcmp("--cc-cmd", args.str[i]) == 0 ||
+                                   strcmp("--param", args.str[i]) == 0 ||
                                    strcmp("--sysroot", args.str[i]) == 0 ||
                                    strcmp("--target", args.str[i]) == 0 ||
                                    strcmp("--wine-objdir", args.str[i]) == 0 ||
@@ -1968,6 +1979,11 @@ int main(int argc, char **argv)
                     {
                         no_default_config = true;
                         raw_compiler_arg = raw_linker_arg = 1;
+                    }
+                    else if (is_option( args, i, "--cc-cmd", &option_arg ))
+                    {
+                        cc_cmd = option_arg;
+                        raw_compiler_arg = raw_linker_arg = 0;
                     }
                     else if (is_option( args, i, "--sysroot", &option_arg ))
                     {
