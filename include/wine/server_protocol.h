@@ -3124,7 +3124,6 @@ struct send_hardware_message_reply
     int             new_y;
     char __pad_28[4];
 };
-#define SEND_HWMSG_INJECTED    0x01
 
 
 
@@ -7093,6 +7092,6 @@ union generic_reply
     struct d3dkmt_mutex_release_reply d3dkmt_mutex_release_reply;
 };
 
-#define SERVER_PROTOCOL_VERSION 930
+#define SERVER_PROTOCOL_VERSION 931
 
 #endif /* __WINE_WINE_SERVER_PROTOCOL_H */
